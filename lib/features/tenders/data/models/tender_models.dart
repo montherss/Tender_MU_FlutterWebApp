@@ -197,6 +197,8 @@ class SupplierItemOfferModel extends SupplierItemOffer {
     super.quantity,
     super.unit,
     super.price,
+    super.origin,
+    super.unitPrice,
     super.note,
     super.isAlternative,
     super.alternativeDescription,
@@ -213,9 +215,155 @@ class SupplierItemOfferModel extends SupplierItemOffer {
       quantity: parseNum(json['quantity']),
       unit: json['unit']?.toString(),
       price: parseNum(json['price']),
+      origin: json['origin']?.toString(),
+      unitPrice: parseNum(json['unitPrice']),
       note: json['note']?.toString(),
       isAlternative: _firstInt(json, ['isAlternative']),
       alternativeDescription: json['alternativeDescription']?.toString(),
+    );
+  }
+}
+
+class TenderAnalysisModel extends TenderAnalysis {
+  const TenderAnalysisModel({
+    required super.committeeDecision,
+    required super.awards,
+    required super.executiveSummary,
+  });
+
+  factory TenderAnalysisModel.fromJson(Map<String, dynamic> json) {
+    final data = _firstMap(json, [
+      'data',
+      'Data',
+      'result',
+      'results',
+      'analysis',
+      'tenderAnalysis',
+    ], fallback: json);
+    final awardsJson = _firstList(data, [
+      'awards',
+      'Awards',
+      'awardRecommendations',
+      'recommendations',
+      'items',
+    ]);
+    return TenderAnalysisModel(
+      committeeDecision: CommitteeDecisionModel.fromJson(
+        _firstMap(data, [
+          'committeeDecision',
+          'CommitteeDecision',
+          'committee_decision',
+          'decision',
+        ], fallback: data),
+      ),
+      awards: awardsJson
+          .map((e) => AnalysisAwardModel.fromJson(_asMap(e)))
+          .toList(),
+      executiveSummary: ExecutiveSummaryModel.fromJson(
+        _firstMap(data, [
+          'executiveSummary',
+          'ExecutiveSummary',
+          'executive_summary',
+          'summary',
+        ], fallback: data),
+      ),
+    );
+  }
+}
+
+class CommitteeDecisionModel extends CommitteeDecision {
+  const CommitteeDecisionModel({super.technicalWeight, super.financialWeight});
+
+  factory CommitteeDecisionModel.fromJson(Map<String, dynamic> json) {
+    return CommitteeDecisionModel(
+      technicalWeight: _firstNum(json, ['technicalWeight', 'technical_weight']),
+      financialWeight: _firstNum(json, ['financialWeight', 'financial_weight']),
+    );
+  }
+}
+
+class AnalysisAwardModel extends AnalysisAward {
+  const AnalysisAwardModel({
+    required super.itemId,
+    super.itemNo,
+    super.description,
+    super.recommendedSupplierId,
+    super.recommendedSupplierName,
+    super.recommendedOfferId,
+    super.isAlternative,
+    super.technicalScore,
+    super.financialScore,
+    super.finalScore,
+    super.confidenceScore,
+    super.awardReason,
+    super.supplierRanking,
+  });
+
+  factory AnalysisAwardModel.fromJson(Map<String, dynamic> json) {
+    final rankingJson = _firstList(json, [
+      'supplierRanking',
+      'SupplierRanking',
+      'supplier_ranking',
+      'rankings',
+    ]);
+    return AnalysisAwardModel(
+      itemId: _firstInt(json, ['itemId', 'itemID', 'tenderItemId']) ?? 0,
+      itemNo: _firstString(json, ['itemNo', 'itemNumber', 'item_no']),
+      description: _firstString(json, ['description', 'itemDescription']),
+      recommendedSupplierId: _firstInt(json, ['recommendedSupplierId']),
+      recommendedSupplierName: _firstString(json, ['recommendedSupplierName']),
+      recommendedOfferId: _firstInt(json, ['recommendedOfferId']),
+      isAlternative: _firstInt(json, ['isAlternative']),
+      technicalScore: _firstNum(json, ['technicalScore', 'technical_score']),
+      financialScore: _firstNum(json, ['financialScore', 'financial_score']),
+      finalScore: _firstNum(json, ['finalScore', 'final_score']),
+      confidenceScore: _firstNum(json, ['confidenceScore', 'confidence_score']),
+      awardReason: _firstString(json, ['awardReason', 'reason']),
+      supplierRanking: rankingJson
+          .map((e) => SupplierRankingModel.fromJson(_asMap(e)))
+          .toList(),
+    );
+  }
+}
+
+class SupplierRankingModel extends SupplierRanking {
+  const SupplierRankingModel({
+    super.finalScore,
+    super.financialScore,
+    super.offerId,
+    super.rank,
+    super.reason,
+    super.supplierId,
+    super.supplierName,
+    super.technicalScore,
+  });
+
+  factory SupplierRankingModel.fromJson(Map<String, dynamic> json) {
+    return SupplierRankingModel(
+      finalScore: _firstNum(json, ['finalScore', 'final_score']),
+      financialScore: _firstNum(json, ['financialScore', 'financial_score']),
+      offerId: _firstInt(json, ['offerId']),
+      rank: _firstInt(json, ['rank']),
+      reason: _firstString(json, ['reason']),
+      supplierId: _firstInt(json, ['supplierId']),
+      supplierName: _firstString(json, ['supplierName']),
+      technicalScore: _firstNum(json, ['technicalScore', 'technical_score']),
+    );
+  }
+}
+
+class ExecutiveSummaryModel extends ExecutiveSummary {
+  const ExecutiveSummaryModel({
+    super.totalItems,
+    super.awardedItems,
+    super.summary,
+  });
+
+  factory ExecutiveSummaryModel.fromJson(Map<String, dynamic> json) {
+    return ExecutiveSummaryModel(
+      totalItems: _firstInt(json, ['totalItems']),
+      awardedItems: _firstInt(json, ['awardedItems']),
+      summary: _firstString(json, ['summary', 'text', 'description']),
     );
   }
 }
@@ -233,6 +381,10 @@ class ItemAssignmentModel extends ItemAssignment {
     super.assignmentType,
     super.createdAt,
     super.price,
+    super.origin,
+    super.quantity,
+    super.unit,
+    super.unitPrice,
     super.offerNote,
     super.isAlternative,
     super.alternativeDescription,
@@ -253,6 +405,10 @@ class ItemAssignmentModel extends ItemAssignment {
       assignmentType: json['assignmentType']?.toString(),
       createdAt: parseDate(json['createdAt']),
       price: parseNum(json['price']),
+      origin: _firstString(json, ['origin', 'countryOfOrigin']),
+      quantity: _firstNum(json, ['quantity']),
+      unit: _firstString(json, ['unit']),
+      unitPrice: _firstNum(json, ['unitPrice']),
       offerNote: json['offerNote']?.toString(),
       isAlternative: _firstInt(json, ['isAlternative']),
       alternativeDescription: json['alternativeDescription']?.toString(),
@@ -260,7 +416,11 @@ class ItemAssignmentModel extends ItemAssignment {
   }
 }
 
-List<dynamic> _asList(dynamic value) => value is List ? value : const [];
+List<dynamic> _asList(dynamic value) {
+  if (value is List) return value;
+  if (value is Map) return [value];
+  return const [];
+}
 
 Map<String, dynamic> _asMap(dynamic value) {
   if (value is Map<String, dynamic>) return value;
@@ -270,29 +430,55 @@ Map<String, dynamic> _asMap(dynamic value) {
   return const {};
 }
 
+dynamic _valueForKey(Map<String, dynamic> json, String key) {
+  if (json.containsKey(key)) return json[key];
+  final normalizedKey = key.toLowerCase();
+  for (final entry in json.entries) {
+    if (entry.key.toLowerCase() == normalizedKey) return entry.value;
+  }
+  return null;
+}
+
+Map<String, dynamic> _firstMap(
+  Map<String, dynamic> json,
+  List<String> keys, {
+  Map<String, dynamic> fallback = const {},
+}) {
+  for (final key in keys) {
+    final value = _valueForKey(json, key);
+    final map = _asMap(value);
+    if (map.isNotEmpty) return map;
+  }
+  return fallback;
+}
+
+List<dynamic> _firstList(Map<String, dynamic> json, List<String> keys) {
+  for (final key in keys) {
+    final list = _asList(_valueForKey(json, key));
+    if (list.isNotEmpty) return list;
+  }
+  return const [];
+}
+
 String? _firstString(Map<String, dynamic> json, List<String> keys) {
   for (final key in keys) {
-    final value = json[key]?.toString().trim();
+    final value = _valueForKey(json, key)?.toString().trim();
     if (value != null && value.isNotEmpty) return value;
+  }
+  return null;
+}
+
+num? _firstNum(Map<String, dynamic> json, List<String> keys) {
+  for (final key in keys) {
+    final parsed = parseNum(_valueForKey(json, key));
+    if (parsed != null) return parsed;
   }
   return null;
 }
 
 int? _firstInt(Map<String, dynamic> json, List<String> keys) {
   for (final key in keys) {
-    final value = json[key];
-    if (value is num) return value.toInt();
-    if (value is bool) return value ? 1 : 0;
-    if (value is String) {
-      final parsed = int.tryParse(value.trim());
-      if (parsed != null) return parsed;
-    }
-  }
-  final normalizedJson = json.map(
-    (key, value) => MapEntry(key.toLowerCase(), value),
-  );
-  for (final key in keys) {
-    final value = normalizedJson[key.toLowerCase()];
+    final value = _valueForKey(json, key);
     if (value is num) return value.toInt();
     if (value is bool) return value ? 1 : 0;
     if (value is String) {

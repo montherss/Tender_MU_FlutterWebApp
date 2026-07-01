@@ -234,6 +234,8 @@ class SupplierItemOffer extends Equatable {
     this.quantity,
     this.unit,
     this.price,
+    this.origin,
+    this.unitPrice,
     this.note,
     this.isAlternative,
     this.alternativeDescription,
@@ -248,6 +250,8 @@ class SupplierItemOffer extends Equatable {
   final num? quantity;
   final String? unit;
   final num? price;
+  final String? origin;
+  final num? unitPrice;
   final String? note;
   final int? isAlternative;
   final String? alternativeDescription;
@@ -265,10 +269,133 @@ class SupplierItemOffer extends Equatable {
     quantity,
     unit,
     price,
+    origin,
+    unitPrice,
     note,
     isAlternative,
     alternativeDescription,
   ];
+}
+
+class TenderAnalysis extends Equatable {
+  const TenderAnalysis({
+    required this.committeeDecision,
+    required this.awards,
+    required this.executiveSummary,
+  });
+
+  final CommitteeDecision committeeDecision;
+  final List<AnalysisAward> awards;
+  final ExecutiveSummary executiveSummary;
+
+  @override
+  List<Object?> get props => [committeeDecision, awards, executiveSummary];
+}
+
+class CommitteeDecision extends Equatable {
+  const CommitteeDecision({this.technicalWeight, this.financialWeight});
+
+  final num? technicalWeight;
+  final num? financialWeight;
+
+  @override
+  List<Object?> get props => [technicalWeight, financialWeight];
+}
+
+class AnalysisAward extends Equatable {
+  const AnalysisAward({
+    required this.itemId,
+    this.itemNo,
+    this.description,
+    this.recommendedSupplierId,
+    this.recommendedSupplierName,
+    this.recommendedOfferId,
+    this.isAlternative,
+    this.technicalScore,
+    this.financialScore,
+    this.finalScore,
+    this.confidenceScore,
+    this.awardReason,
+    this.supplierRanking = const [],
+  });
+
+  final int itemId;
+  final String? itemNo;
+  final String? description;
+  final int? recommendedSupplierId;
+  final String? recommendedSupplierName;
+  final int? recommendedOfferId;
+  final int? isAlternative;
+  final num? technicalScore;
+  final num? financialScore;
+  final num? finalScore;
+  final num? confidenceScore;
+  final String? awardReason;
+  final List<SupplierRanking> supplierRanking;
+
+  bool get hasAlternative => isAlternative == 1;
+
+  @override
+  List<Object?> get props => [
+    itemId,
+    itemNo,
+    description,
+    recommendedSupplierId,
+    recommendedSupplierName,
+    recommendedOfferId,
+    isAlternative,
+    technicalScore,
+    financialScore,
+    finalScore,
+    confidenceScore,
+    awardReason,
+    supplierRanking,
+  ];
+}
+
+class SupplierRanking extends Equatable {
+  const SupplierRanking({
+    this.finalScore,
+    this.financialScore,
+    this.offerId,
+    this.rank,
+    this.reason,
+    this.supplierId,
+    this.supplierName,
+    this.technicalScore,
+  });
+
+  final num? finalScore;
+  final num? financialScore;
+  final int? offerId;
+  final int? rank;
+  final String? reason;
+  final int? supplierId;
+  final String? supplierName;
+  final num? technicalScore;
+
+  @override
+  List<Object?> get props => [
+    finalScore,
+    financialScore,
+    offerId,
+    rank,
+    reason,
+    supplierId,
+    supplierName,
+    technicalScore,
+  ];
+}
+
+class ExecutiveSummary extends Equatable {
+  const ExecutiveSummary({this.totalItems, this.awardedItems, this.summary});
+
+  final int? totalItems;
+  final int? awardedItems;
+  final String? summary;
+
+  @override
+  List<Object?> get props => [totalItems, awardedItems, summary];
 }
 
 class SupplierItemOfferRequest {
@@ -277,6 +404,8 @@ class SupplierItemOfferRequest {
     required this.supplierId,
     required this.tenderItemId,
     required this.price,
+    this.origin,
+    required this.unitPrice,
     this.note,
     required this.isAlternative,
     this.alternativeDescription,
@@ -286,6 +415,8 @@ class SupplierItemOfferRequest {
   final int supplierId;
   final int tenderItemId;
   final num price;
+  final String? origin;
+  final num unitPrice;
   final String? note;
   final int isAlternative;
   final String? alternativeDescription;
@@ -295,6 +426,8 @@ class SupplierItemOfferRequest {
     'supplierId': supplierId,
     'tenderItemId': tenderItemId,
     'price': price,
+    'origin': origin?.trim(),
+    'unitPrice': unitPrice,
     'note': note?.trim(),
     'isAlternative': isAlternative,
     'alternativeDescription': alternativeDescription?.trim(),
@@ -314,6 +447,10 @@ class ItemAssignment extends Equatable {
     this.assignmentType,
     this.createdAt,
     this.price,
+    this.origin,
+    this.quantity,
+    this.unit,
+    this.unitPrice,
     this.offerNote,
     this.isAlternative,
     this.alternativeDescription,
@@ -330,6 +467,10 @@ class ItemAssignment extends Equatable {
   final String? assignmentType;
   final DateTime? createdAt;
   final num? price;
+  final String? origin;
+  final num? quantity;
+  final String? unit;
+  final num? unitPrice;
   final String? offerNote;
   final int? isAlternative;
   final String? alternativeDescription;
@@ -350,6 +491,10 @@ class ItemAssignment extends Equatable {
     assignmentType,
     createdAt,
     price,
+    origin,
+    quantity,
+    unit,
+    unitPrice,
     offerNote,
     isAlternative,
     alternativeDescription,
@@ -440,11 +585,13 @@ abstract class TenderRepository {
   Future<void> createTender(CreateTenderRequest request);
   Future<void> addFinancialCommitmentNo(int tenderId, String value);
   Future<void> addTenderItems(int tenderId, List<TenderItem> items);
+
   Future<void> uploadAttachments({
     required int tenderId,
     required List<PlatformFile> files,
     required void Function(int sent, int total) onProgress,
   });
+  Future<void> deleteAttachment(int id);
   Future<void> addTenderCategoryAndType(
     int tenderId,
     String category,
@@ -460,6 +607,7 @@ abstract class TenderRepository {
     required int supplierId,
   });
   Future<List<SupplierItemOffer>> getSupplierItemOffersByTenderId(int tenderId);
+  Future<TenderAnalysis> getAnalysisByTenderId(int tenderId);
   Future<List<SupplierItemOffer>> addSupplierItemOffer(
     SupplierItemOfferRequest request,
   );

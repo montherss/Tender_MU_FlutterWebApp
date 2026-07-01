@@ -1,7 +1,63 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 
+import '../constants/app_constants.dart';
 import '../theme/app_theme.dart';
+
+class AppCopyrightFooter extends StatelessWidget {
+  const AppCopyrightFooter({super.key, this.lightText = false});
+
+  final bool lightText;
+
+  @override
+  Widget build(BuildContext context) {
+    final year = DateTime.now().year;
+    final textColor = lightText
+        ? Colors.white.withValues(alpha: .75)
+        : AppColors.muted;
+    final accentColor = lightText
+        ? Colors.white.withValues(alpha: .92)
+        : AppColors.primary.withValues(alpha: .85);
+    final captionStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+      color: textColor,
+      fontSize: 11,
+      height: 1.5,
+    );
+    final accentStyle = captionStyle?.copyWith(
+      color: accentColor,
+      fontWeight: FontWeight.w700,
+    );
+
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 12.h, horizontal: 16.w),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.fingerprint_rounded, size: 16, color: accentColor),
+              SizedBox(width: 6.w),
+              Text(AppConstants.electronicSignatureLabel, style: accentStyle),
+            ],
+          ),
+          SizedBox(height: 4.h),
+          Text(
+            '${AppConstants.allRightsReserved} © $year',
+            style: captionStyle,
+            textAlign: TextAlign.center,
+          ),
+          Text(
+            'تطوير: ${AppConstants.developerName}',
+            style: captionStyle?.copyWith(fontWeight: FontWeight.w600),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class ResponsivePage extends StatelessWidget {
   const ResponsivePage({super.key, required this.child, this.maxWidth = 1280});
@@ -86,7 +142,7 @@ class SectionHeader extends StatelessWidget {
             ],
           ),
         ),
-        if (trailing != null) trailing!,
+        ?trailing,
       ],
     );
   }
@@ -117,7 +173,11 @@ class EmptyState extends StatelessWidget {
               SizedBox(height: 16.h),
               Text(title, style: Theme.of(context).textTheme.titleLarge),
               SizedBox(height: 8.h),
-              Text(message, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.muted)),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppColors.muted),
+              ),
             ],
           ),
         ),
@@ -158,7 +218,8 @@ class LoadingSkeleton extends StatefulWidget {
   State<LoadingSkeleton> createState() => _LoadingSkeletonState();
 }
 
-class _LoadingSkeletonState extends State<LoadingSkeleton> with SingleTickerProviderStateMixin {
+class _LoadingSkeletonState extends State<LoadingSkeleton>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1100),
@@ -175,7 +236,11 @@ class _LoadingSkeletonState extends State<LoadingSkeleton> with SingleTickerProv
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, _) {
-        final color = Color.lerp(AppColors.border, Colors.white, _controller.value)!;
+        final color = Color.lerp(
+          AppColors.border,
+          Colors.white,
+          _controller.value,
+        )!;
         return Column(
           children: List.generate(
             widget.rows,

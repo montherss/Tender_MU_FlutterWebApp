@@ -49,6 +49,11 @@ class TenderRepositoryImpl implements TenderRepository {
   }
 
   @override
+  Future<void> deleteAttachment(int id) {
+    return _guard(() => _remoteDataSource.deleteAttachment(id));
+  }
+
+  @override
   Future<void> addTenderCategoryAndType(
     int tenderId,
     String category,
@@ -107,6 +112,11 @@ class TenderRepositoryImpl implements TenderRepository {
     return _guard(
       () => _remoteDataSource.getSupplierItemOffersByTenderId(tenderId),
     );
+  }
+
+  @override
+  Future<TenderAnalysis> getAnalysisByTenderId(int tenderId) {
+    return _guard(() => _remoteDataSource.getAnalysisByTenderId(tenderId));
   }
 
   @override

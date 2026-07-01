@@ -1,12 +1,14 @@
+import 'dart:typed_data';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:universal_html/html.dart' as html;
-
-import '../../../../core/constants/app_constants.dart';
+import '../../../../core/network/api_client.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/utils/app_utils.dart';
+import '../../../../core/utils/authenticated_file_opener.dart';
+import '../../../../injection_container.dart';
 import '../../../../core/utils/pdf_generator.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../domain/tender_domain.dart';
@@ -741,18 +743,26 @@ class SupplierItemOffersSection extends StatefulWidget {
 }
 
 class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
+
+  int? _lastSelectedSupplierId;
+  int? _lastSelectedItemId;
   final _formKey = GlobalKey<FormState>();
   final _price = TextEditingController();
+  final _origin = TextEditingController();
+  final _unitPrice = TextEditingController();
   final _note = TextEditingController();
   final _alternativeDescription = TextEditingController();
+  final _itemSearchController = TextEditingController();
+  final _itemSearchFocusNode = FocusNode();
   int? _selectedSupplierId;
   int? _selectedItemId;
-  bool _isAlternative = false;
   bool _offersRequested = false;
+  bool _printingAnalysis = false;
 
   @override
   void initState() {
     super.initState();
+    _unitPrice.addListener(_recalculatePrice);
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadOffers());
   }
 
@@ -765,8 +775,23 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
       (supplier) => supplier.id == _selectedSupplierId,
     );
     final itemStillExists = items.any((item) => item.id == _selectedItemId);
-    if (!supplierStillExists) _selectedSupplierId = null;
-    if (!itemStillExists) _selectedItemId = null;
+    if (!supplierStillExists) {
+      if (_lastSelectedSupplierId != null &&
+          suppliers.any((s) => s.id == _lastSelectedSupplierId)) {
+        _selectedSupplierId = _lastSelectedSupplierId;
+      } else {
+        _selectedSupplierId = null;
+      }
+    }
+    if (!itemStillExists) {
+      if (_lastSelectedItemId != null &&
+          items.any((i) => i.id == _lastSelectedItemId)) {
+        _selectedItemId = _lastSelectedItemId;
+      } else {
+        _selectedItemId = null;
+      }
+      _syncItemSearchText(items);
+    }
     if (oldWidget.state.tender?.id != widget.state.tender?.id) {
       _offersRequested = false;
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadOffers());
@@ -776,8 +801,12 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
   @override
   void dispose() {
     _price.dispose();
+    _origin.dispose();
+    _unitPrice.dispose();
     _note.dispose();
     _alternativeDescription.dispose();
+    _itemSearchController.dispose();
+    _itemSearchFocusNode.dispose();
     super.dispose();
   }
 
@@ -786,6 +815,15 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
     final state = widget.state;
     final suppliers = _uniqueSuppliers(state.tenderSuppliers);
     final items = _itemsWithIds(state.tender?.items ?? const []);
+    final selectedItem = _selectedItem(items);
+    final hasPrimaryOffer = _hasPrimaryOffer(
+      state.supplierItemOffers,
+      supplierId: _selectedSupplierId,
+      itemId: _selectedItemId,
+    );
+    final canResolveOfferType =
+        _selectedSupplierId != null && _selectedItemId != null;
+    final isAlternativeOffer = canResolveOfferType && hasPrimaryOffer;
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -795,19 +833,56 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
             subtitle:
                 'اختر المورد والمادة ثم أدخل السعر وملاحظات العرض والبديل إن وجد.',
             icon: Icons.request_quote_outlined,
-            trailing: OutlinedButton.icon(
-              onPressed:
-                  state.supplierItemOffers.isEmpty || state.tender == null
-                  ? null
-                  : () => TenderPdfGenerator.printPdf(
-                      TenderPdfGenerator.supplierItemOffersPdf(
-                        state.tender!,
-                        state.supplierItemOffers,
-                      ),
-                      'supplier-offers-${state.tender!.id}.pdf',
-                    ),
-              icon: const Icon(Icons.print_outlined),
-              label: const Text('طباعة PDF'),
+            trailing: Wrap(
+              spacing: 8.w,
+              runSpacing: 8.h,
+              children: [
+                OutlinedButton.icon(
+                  onPressed:
+                      state.supplierItemOffers.isEmpty ||
+                          state.tender == null ||
+                          _printingAnalysis
+                      ? null
+                      : () => _exportSupplierOffers(state, download: false),
+                  icon: const Icon(Icons.print_outlined),
+                  label: const Text('طباعة PDF'),
+                ),
+                OutlinedButton.icon(
+                  onPressed:
+                      state.supplierItemOffers.isEmpty ||
+                          state.tender == null ||
+                          _printingAnalysis
+                      ? null
+                      : () => _exportSupplierOffers(state, download: true),
+                  icon: const Icon(Icons.download_outlined),
+                  label: const Text('تحميل PDF'),
+                ),
+                OutlinedButton.icon(
+                  onPressed:
+                      state.supplierItemOffers.isEmpty ||
+                          state.tender == null ||
+                          _printingAnalysis
+                      ? null
+                      : () => _exportSupplierOffersWithAnalysis(
+                          state,
+                          download: true,
+                        ),
+                  icon: _printingAnalysis
+                      ? SizedBox(
+                          width: 18.r,
+                          height: 18.r,
+                          child: const CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(Icons.auto_awesome_outlined),
+                  label: Text(
+                    _printingAnalysis
+                        ? 'جاري التحليل...'
+                        : 'PDF مع رأي الذكاء الاصطناعي',
+                  ),
+                ),
+              ],
             ),
           ),
           SizedBox(height: 16.h),
@@ -826,81 +901,191 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Wrap(
-                    spacing: 12.w,
-                    runSpacing: 12.h,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: 300.w,
-                        child: DropdownButtonFormField<int>(
-                          key: ValueKey('offer-supplier-$_selectedSupplierId'),
-                          initialValue: _selectedSupplierId,
-                          items: suppliers
-                              .map(
-                                (supplier) => DropdownMenuItem<int>(
-                                  value: supplier.id,
-                                  child: Text(supplier.displayName),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: state.addingSupplierItemOffer
-                              ? null
-                              : (value) =>
-                                    setState(() => _selectedSupplierId = value),
-                          decoration: const InputDecoration(
-                            labelText: 'المورد',
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final spacing = 12.w;
+                      final fullWidth = constraints.maxWidth;
+                      final twoColumnWidth = (fullWidth - spacing) / 2;
+                      final compact = fullWidth < 720;
+                      final dropdownWidth = compact
+                          ? fullWidth
+                          : twoColumnWidth.clamp(260.0, 360.0);
+                      final smallFieldWidth = compact
+                          ? fullWidth
+                          : ((fullWidth - spacing * 3) / 4).clamp(150.0, 210.0);
+                      final originWidth = compact
+                          ? fullWidth
+                          : twoColumnWidth.clamp(220.0, 300.0);
+                      final noteWidth = compact
+                          ? fullWidth
+                          : twoColumnWidth.clamp(280.0, 420.0);
+
+                      return Wrap(
+                        spacing: spacing,
+                        runSpacing: 12.h,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: dropdownWidth,
+                            child: DropdownButtonFormField<int>(
+                              key: ValueKey(
+                                'offer-supplier-$_selectedSupplierId',
+                              ),
+                              initialValue: _selectedSupplierId,
+                              isExpanded: true,
+                              menuMaxHeight: 360.h,
+                              selectedItemBuilder: (_) => suppliers
+                                  .map(
+                                    (supplier) => _dropdownSelectedText(
+                                      supplier.displayName,
+                                    ),
+                                  )
+                                  .toList(),
+                              items: suppliers
+                                  .map(
+                                    (supplier) => DropdownMenuItem<int>(
+                                      value: supplier.id,
+                                      child: _dropdownMenuText(
+                                        supplier.displayName,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: state.addingSupplierItemOffer
+                                  ? null
+                                  : (value) => setState(() {
+                                      _selectedSupplierId = value;
+                                      _alternativeDescription.clear();
+                                    }),
+                              decoration: const InputDecoration(
+                                labelText: 'المورد',
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                      SizedBox(
-                        width: 300.w,
-                        child: DropdownButtonFormField<int>(
-                          key: ValueKey('offer-item-$_selectedItemId'),
-                          initialValue: _selectedItemId,
-                          items: items
-                              .map(
-                                (item) => DropdownMenuItem<int>(
-                                  value: item.id,
-                                  child: Text(
-                                    '${item.itemNo ?? item.id} - ${item.description ?? 'مادة'}',
+                          SizedBox(
+                            width: dropdownWidth,
+                            child: Autocomplete<TenderItem>(
+                              key: ValueKey('offer-item-${items.length}'),
+                              textEditingController: _itemSearchController,
+                              focusNode: _itemSearchFocusNode,
+                              displayStringForOption: _itemDropdownLabel,
+                              optionsBuilder: (textEditingValue) =>
+                                  _filterItems(items, textEditingValue.text),
+                              onSelected: (item) => setState(() {
+                                _selectedItemId = item.id;
+                                _alternativeDescription.clear();
+                                _recalculatePrice();
+                              }),
+                              fieldViewBuilder:
+                                  (
+                                    context,
+                                    controller,
+                                    focusNode,
+                                    onFieldSubmitted,
+                                  ) => TextFormField(
+                                    controller: controller,
+                                    focusNode: focusNode,
+                                    enabled: !state.addingSupplierItemOffer,
+                                    onFieldSubmitted: (_) =>
+                                        onFieldSubmitted(),
+                                    decoration: const InputDecoration(
+                                      labelText: 'المادة',
+                                      hintText: 'اكتب رقم أو اسم المادة',
+                                      suffixIcon: Icon(Icons.search),
+                                    ),
+                                  ),
+                              optionsViewBuilder: (context, onSelected, options) => Align(
+                                alignment: AlignmentDirectional.topStart,
+                                child: Material(
+                                  elevation: 4,
+                                  borderRadius: BorderRadius.circular(12.r),
+                                  child: ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      maxHeight: 360.h,
+                                      maxWidth: dropdownWidth,
+                                    ),
+                                    child: ListView.builder(
+                                      padding: EdgeInsets.zero,
+                                      shrinkWrap: true,
+                                      itemCount: options.length,
+                                      itemBuilder: (context, index) {
+                                        final item = options.elementAt(index);
+                                        return InkWell(
+                                          onTap: () => onSelected(item),
+                                          child: Padding(
+                                            padding: EdgeInsets.symmetric(
+                                              horizontal: 12.w,
+                                              vertical: 10.h,
+                                            ),
+                                            child: _dropdownMenuText(
+                                              _itemDropdownLabel(item),
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
                                   ),
                                 ),
-                              )
-                              .toList(),
-                          onChanged: state.addingSupplierItemOffer
-                              ? null
-                              : (value) =>
-                                    setState(() => _selectedItemId = value),
-                          decoration: const InputDecoration(
-                            labelText: 'المادة',
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                      SizedBox(
-                        width: 160.w,
-                        child: TextFormField(
-                          controller: _price,
-                          keyboardType: TextInputType.number,
-                          validator: (value) {
-                            final parsed = num.tryParse(value ?? '');
-                            if (parsed == null) return 'السعر مطلوب';
-                            if (parsed <= 0) return 'أدخل سعراً صحيحاً';
-                            return null;
-                          },
-                          decoration: const InputDecoration(labelText: 'السعر'),
-                        ),
-                      ),
-                      SizedBox(
-                        width: 300.w,
-                        child: TextFormField(
-                          controller: _note,
-                          decoration: const InputDecoration(
-                            labelText: 'ملاحظات العرض',
+                          SizedBox(
+                            width: smallFieldWidth,
+                            child: TextFormField(
+                              controller: _unitPrice,
+                              keyboardType: TextInputType.number,
+                              validator: (value) {
+                                final parsed = num.tryParse(value ?? '');
+                                if (parsed == null) return 'سعر الوحدة مطلوب';
+                                if (parsed <= 0) return 'أدخل سعراً صحيحاً';
+                                return null;
+                              },
+                              decoration: const InputDecoration(
+                                labelText: 'سعر الوحدة الواحدة',
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                    ],
+                          SizedBox(
+                            width: smallFieldWidth,
+                            child: TextFormField(
+                              controller: _price,
+                              readOnly: true,
+                              validator: (value) {
+                                final parsed = num.tryParse(value ?? '');
+                                if (parsed == null) return 'المجموع مطلوب';
+                                if (parsed <= 0) return 'المجموع غير صحيح';
+                                return null;
+                              },
+                              decoration: InputDecoration(
+                                labelText: 'السعر / المجموع',
+                                helperMaxLines: 2,
+                                helperText: selectedItem?.quantity == null
+                                    ? 'اختر مادة لها كمية لحساب السعر'
+                                    : 'سعر الوحدة × ${selectedItem!.quantity}',
+                              ),
+                            ),
+                          ),
+                          SizedBox(
+                            width: originWidth,
+                            child: TextFormField(
+                              controller: _origin,
+                              decoration: const InputDecoration(
+                                labelText: 'بلد المنشأ',
+                              ),
+                            ),
+                          ),
+                          SizedBox(
+                            width: noteWidth,
+                            child: TextFormField(
+                              controller: _note,
+                              decoration: const InputDecoration(
+                                labelText: 'ملاحظات العرض',
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                   SizedBox(height: 12.h),
                   Container(
@@ -916,17 +1101,17 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
                       children: [
                         SwitchListTile(
                           contentPadding: EdgeInsets.zero,
-                          value: _isAlternative,
-                          onChanged: state.addingSupplierItemOffer
-                              ? null
-                              : (value) =>
-                                    setState(() => _isAlternative = value),
+                          value: isAlternativeOffer,
+                          onChanged: null,
                           title: const Text('عرض بديل'),
-                          subtitle: const Text(
-                            'فعّل هذا الخيار إذا كان العرض لمادة بديلة.',
+                          subtitle: Text(
+                            _offerTypeMessage(
+                              canResolveOfferType: canResolveOfferType,
+                              hasPrimaryOffer: hasPrimaryOffer,
+                            ),
                           ),
                         ),
-                        if (_isAlternative) ...[
+                        if (isAlternativeOffer) ...[
                           SizedBox(height: 8.h),
                           TextFormField(
                             controller: _alternativeDescription,
@@ -988,14 +1173,22 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
       return;
     }
     if (!_formKey.currentState!.validate()) return;
+    _lastSelectedSupplierId = supplierId;
+    _lastSelectedItemId = itemId;
     final success = await context
         .read<TenderDetailsCubit>()
         .addSupplierItemOffer(
           supplierId: supplierId,
           tenderItemId: itemId,
           price: num.parse(_price.text),
+          origin: _origin.text,
+          unitPrice: num.parse(_unitPrice.text),
           note: _note.text,
-          isAlternative: _isAlternative,
+          isAlternative: _hasPrimaryOffer(
+            widget.state.supplierItemOffers,
+            supplierId: supplierId,
+            itemId: itemId,
+          ),
           alternativeDescription: _alternativeDescription.text,
         );
     if (!context.mounted || !success) return;
@@ -1006,17 +1199,163 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
   void _loadOffers() {
     if (!mounted || _offersRequested || widget.state.tender == null) return;
     _offersRequested = true;
+    if (_selectedSupplierId != null) {
+      _lastSelectedSupplierId = _selectedSupplierId;
+    }
+    if (_selectedItemId != null) {
+      _lastSelectedItemId = _selectedItemId;
+    }
     context.read<TenderDetailsCubit>().loadSupplierItemOffers();
+  }
+
+  Future<void> _exportSupplierOffers(
+    TenderDetailsState state, {
+    required bool download,
+  }) async {
+    final tender = state.tender;
+    if (tender == null) return;
+
+    final fileName = 'supplier-offers-${tender.id}.pdf';
+    await _saveOrPrintPdf(
+      TenderPdfGenerator.supplierItemOffersPdf(
+        tender,
+        state.supplierItemOffers,
+      ),
+      fileName,
+      download: download,
+    );
+    if (!mounted) return;
+    if (download) {
+      showAppSnackBar(context, message: 'تم تجهيز كشف عروض الأسعار للتحميل');
+    }
+  }
+
+  Future<void> _exportSupplierOffersWithAnalysis(
+    TenderDetailsState state, {
+    required bool download,
+  }) async {
+    final tender = state.tender;
+    if (tender == null || _printingAnalysis) return;
+
+    setState(() => _printingAnalysis = true);
+    var dialogOpen = true;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const _AiAnalysisLoadingDialog(),
+    );
+
+    try {
+      final analysis = await sl<TenderRepository>().getAnalysisByTenderId(
+        tender.id,
+      );
+      if (!mounted) return;
+      if (dialogOpen) {
+        Navigator.of(context, rootNavigator: true).pop();
+        dialogOpen = false;
+      }
+      await _exportSupplierOffersPdf(
+        tender: tender,
+        offers: state.supplierItemOffers,
+        analysis: analysis,
+        download: download,
+        fileName: 'supplier-offers-${tender.id}.pdf',
+      );
+    } on AppException catch (error) {
+      if (!mounted) return;
+      if (dialogOpen) {
+        Navigator.of(context, rootNavigator: true).pop();
+        dialogOpen = false;
+      }
+      showAppSnackBar(context, message: error.message, isError: true);
+    } catch (error) {
+      debugPrint('Failed to export supplier offers with analysis: $error');
+      if (!mounted) return;
+      if (dialogOpen) {
+        Navigator.of(context, rootNavigator: true).pop();
+        dialogOpen = false;
+      }
+      showAppSnackBar(
+        context,
+        message: 'تعذر توليد كشف عروض الأسعار مع تحليل الذكاء الاصطناعي.',
+        isError: true,
+      );
+    } finally {
+      if (mounted) setState(() => _printingAnalysis = false);
+    }
+  }
+
+  Future<void> _exportSupplierOffersPdf({
+    required TenderDetails tender,
+    required List<SupplierItemOffer> offers,
+    required TenderAnalysis analysis,
+    required bool download,
+    required String fileName,
+  }) async {
+    try {
+      await _saveOrPrintPdf(
+        TenderPdfGenerator.supplierItemOffersPdf(
+          tender,
+          offers,
+          analysis: analysis,
+          compactAnalysis: true,
+        ),
+        fileName,
+        download: download,
+      );
+      if (!mounted) return;
+      showAppSnackBar(
+        context,
+        message: download
+            ? 'تم تجهيز الكشف مع التحليل للتحميل'
+            : 'تم تجهيز الكشف مع التحليل',
+      );
+      return;
+    } catch (error) {
+      debugPrint(
+        'Analysis PDF generation failed, retrying without analysis: $error',
+      );
+    }
+
+    await _saveOrPrintPdf(
+      TenderPdfGenerator.supplierItemOffersPdf(tender, offers),
+      fileName,
+      download: download,
+    );
+    if (!mounted) return;
+    showAppSnackBar(
+      context,
+      message: download
+          ? 'تم تجهيز الكشف بدون صفحة التحليل للتحميل'
+          : 'تم تجهيز الكشف بدون صفحة التحليل',
+    );
+  }
+
+  Future<void> _saveOrPrintPdf(
+    Future<Uint8List> pdf,
+    String fileName, {
+    required bool download,
+  }) async {
+    if (download) {
+      await TenderPdfGenerator.downloadPdf(pdf, fileName);
+    } else {
+      await TenderPdfGenerator.printPdf(pdf, fileName);
+    }
   }
 
   void _clearForm() {
     setState(() {
-      _selectedSupplierId = null;
+      _lastSelectedSupplierId = _selectedSupplierId;
+      _lastSelectedItemId = _selectedItemId;
       _selectedItemId = null;
-      _isAlternative = false;
       _price.clear();
+      _origin.clear();
+      _unitPrice.clear();
       _note.clear();
       _alternativeDescription.clear();
+      _syncItemSearchText(
+        _itemsWithIds(widget.state.tender?.items ?? const []),
+      );
     });
   }
 
@@ -1031,6 +1370,207 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
   List<TenderItem> _itemsWithIds(List<TenderItem> items) {
     return items.where((item) => item.id != null).toList();
   }
+
+  TenderItem? _selectedItem(List<TenderItem> items) {
+    for (final item in items) {
+      if (item.id == _selectedItemId) return item;
+    }
+    return null;
+  }
+
+  String _itemDropdownLabel(TenderItem item) {
+    return '${item.itemNo ?? item.id} - ${item.description ?? 'مادة'}';
+  }
+
+  Iterable<TenderItem> _filterItems(List<TenderItem> items, String query) {
+    final trimmed = query.trim().toLowerCase();
+    if (trimmed.isEmpty) return items;
+    return items.where((item) {
+      final itemNo = (item.itemNo ?? item.id?.toString() ?? '')
+          .toLowerCase();
+      final description = (item.description ?? '').toLowerCase();
+      return itemNo.contains(trimmed) || description.contains(trimmed);
+    });
+  }
+
+  void _syncItemSearchText(List<TenderItem> items) {
+    if (_selectedItemId == null) {
+      _itemSearchController.text = '';
+      return;
+    }
+    final item = _selectedItem(items);
+    _itemSearchController.text = item != null ? _itemDropdownLabel(item) : '';
+  }
+
+  Widget _dropdownSelectedText(String text) {
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        softWrap: false,
+      ),
+    );
+  }
+
+  Widget _dropdownMenuText(String text) {
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: 520.w),
+      child: Text(
+        text,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        softWrap: true,
+      ),
+    );
+  }
+
+  void _recalculatePrice() {
+    final unitPrice = num.tryParse(_unitPrice.text);
+    final items = _itemsWithIds(widget.state.tender?.items ?? const []);
+    final quantity = _selectedItem(items)?.quantity;
+    if (unitPrice == null || unitPrice <= 0 || quantity == null) {
+      _price.clear();
+      return;
+    }
+    _price.text = _formatOfferNumber(unitPrice * quantity);
+  }
+
+  String _formatOfferNumber(num value) {
+    if (value % 1 == 0) return value.toInt().toString();
+    return value.toStringAsFixed(3).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  bool _hasPrimaryOffer(
+    List<SupplierItemOffer> offers, {
+    required int? supplierId,
+    required int? itemId,
+  }) {
+    if (supplierId == null || itemId == null) return false;
+    return offers.any(
+      (offer) =>
+          offer.supplierId == supplierId &&
+          offer.itemId == itemId &&
+          !offer.hasAlternative,
+    );
+  }
+
+  String _offerTypeMessage({
+    required bool canResolveOfferType,
+    required bool hasPrimaryOffer,
+  }) {
+    if (!canResolveOfferType) {
+      return 'اختر المورد والمادة لتحديد هل العرض أساسي أم بديل.';
+    }
+    if (hasPrimaryOffer) {
+      return 'يوجد عرض أساسي لهذه المادة من هذا المورد، لذلك سيتم حفظ العرض كبديل';
+    }
+    return 'لا يوجد عرض أساسي بعد، سيتم حفظ هذا العرض كأساسي ';
+  }
+}
+
+class _AiAnalysisLoadingDialog extends StatefulWidget {
+  const _AiAnalysisLoadingDialog();
+
+  @override
+  State<_AiAnalysisLoadingDialog> createState() =>
+      _AiAnalysisLoadingDialogState();
+}
+
+class _AiAnalysisLoadingDialogState extends State<_AiAnalysisLoadingDialog>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1400),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Dialog(
+        insetPadding: EdgeInsets.symmetric(horizontal: 32.w),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        child: Container(
+          width: 430.w,
+          padding: EdgeInsets.all(26.r),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(28),
+            // gradient: LinearGradient(
+            //   begin: Alignment.topRight,
+            //   end: Alignment.bottomLeft,
+            //   colors: [
+            //     AppColors.primary.withValues(alpha: .10),
+            //     Colors.white,
+            //     AppColors.gold.withValues(alpha: .10),
+            //   ],
+            // ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedBuilder(
+                animation: _controller,
+                builder: (context, child) {
+                  return Transform.rotate(
+                    angle: _controller.value * 6.28318,
+                    child: child,
+                  );
+                },
+                child: Container(
+                  width: 72.r,
+                  height: 72.r,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: AppColors.primary.withValues(alpha: .28),
+                      width: 6,
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.auto_awesome,
+                    color: AppColors.primary,
+                    size: 34,
+                  ),
+                ),
+              ),
+              SizedBox(height: 18.h),
+              Text(
+                'الذكاء الاصطناعي يحلل العروض',
+                style: Theme.of(context).textTheme.titleLarge,
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 8.h),
+              const Text(
+                'يتم الآن قراءة عروض الموردين وموازنة الجودة الفنية مع السعر لاختيار التوصيات الأنسب. قد تستغرق العملية بعض الوقت.',
+                style: TextStyle(color: AppColors.muted, height: 1.6),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 22.h),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(999),
+                child: const LinearProgressIndicator(minHeight: 8),
+              ),
+              SizedBox(height: 10.h),
+              Text(
+                'يرجى الانتظار حتى اكتمال التحليل وتوليد الكشف...',
+                style: Theme.of(context).textTheme.bodySmall,
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _SupplierItemOffersTable extends StatelessWidget {
@@ -1041,7 +1581,7 @@ class _SupplierItemOffersTable extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _HorizontalTableScroll(
-      minWidth: 1080,
+      minWidth: 1280,
       child: DataTable(
         columns: const [
           DataColumn(label: Text('المورد')),
@@ -1049,6 +1589,8 @@ class _SupplierItemOffersTable extends StatelessWidget {
           DataColumn(label: Text('الوصف')),
           DataColumn(label: Text('الكمية')),
           DataColumn(label: Text('الوحدة')),
+          DataColumn(label: Text('بلد المنشأ')),
+          DataColumn(label: Text('سعر الوحدة')),
           DataColumn(label: Text('السعر')),
           DataColumn(label: Text('بديل')),
           DataColumn(label: Text('الملاحظات')),
@@ -1065,6 +1607,8 @@ class _SupplierItemOffersTable extends StatelessWidget {
                   ),
                   DataCell(Text(offer.quantity?.toString() ?? '-')),
                   DataCell(Text(offer.unit ?? '-')),
+                  DataCell(Text(offer.origin ?? '-')),
+                  DataCell(Text(offer.unitPrice?.toString() ?? '-')),
                   DataCell(Text(offer.price?.toString() ?? '-')),
                   DataCell(Text(offer.hasAlternative ? 'نعم' : 'لا')),
                   DataCell(
@@ -1098,6 +1642,7 @@ class TenderItemAssignmentSection extends StatefulWidget {
 class _TenderItemAssignmentSectionState
     extends State<TenderItemAssignmentSection> {
   bool _dataRequested = false;
+  int? _editingTenderItemId;
 
   @override
   void initState() {
@@ -1110,6 +1655,7 @@ class _TenderItemAssignmentSectionState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.state.tender?.id != widget.state.tender?.id) {
       _dataRequested = false;
+      _editingTenderItemId = null;
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
     }
   }
@@ -1117,6 +1663,10 @@ class _TenderItemAssignmentSectionState
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
+    final assignedItemIds = _assignedItemIds(state.itemAssignments);
+    final editingTenderItemId = assignedItemIds.contains(_editingTenderItemId)
+        ? _editingTenderItemId
+        : null;
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1162,6 +1712,35 @@ class _TenderItemAssignmentSectionState
             style: Theme.of(context).textTheme.titleMedium,
           ),
           SizedBox(height: 10.h),
+          if (editingTenderItemId != null) ...[
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(12.r),
+              decoration: BoxDecoration(
+                color: AppColors.teal.withValues(alpha: .08),
+                border: Border.all(color: AppColors.teal.withValues(alpha: .3)),
+                borderRadius: BorderRadius.circular(16.r),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.edit_note_outlined, color: AppColors.teal),
+                  SizedBox(width: 8.w),
+                  Expanded(
+                    child: Text(
+                      'وضع تعديل الإحالة مفعل للمادة رقم $editingTenderItemId. اختر عرضاً آخر لنفس المادة لإعادة الإحالة.',
+                      style: const TextStyle(color: AppColors.teal),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () =>
+                        setState(() => _editingTenderItemId = null),
+                    child: const Text('إلغاء التعديل'),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 10.h),
+          ],
           if (state.supplierItemOffersLoading)
             const LinearProgressIndicator()
           else if (state.supplierItemOffers.isEmpty)
@@ -1172,12 +1751,16 @@ class _TenderItemAssignmentSectionState
           else
             _AssignmentOffersTable(
               offers: state.supplierItemOffers,
+              assignedItemIds: assignedItemIds,
+              editingTenderItemId: editingTenderItemId,
               loadingOfferIds: state.loadingItemAssignments,
               onAssign: _openAssignmentDialog,
+              onEditItem: (itemId) =>
+                  setState(() => _editingTenderItemId = itemId),
             ),
           SizedBox(height: 22.h),
           Text(
-            'المواد المحالة (${state.itemAssignments.length})',
+            'المواد المحالة (${assignedItemIds.length})',
             style: Theme.of(context).textTheme.titleMedium,
           ),
           SizedBox(height: 10.h),
@@ -1189,7 +1772,10 @@ class _TenderItemAssignmentSectionState
               style: TextStyle(color: AppColors.muted),
             )
           else
-            _ItemAssignmentsTable(assignments: state.itemAssignments),
+            _ItemAssignmentsTable(
+              assignments: state.itemAssignments,
+              onEdit: _startAssignmentEdit,
+            ),
         ],
       ),
     );
@@ -1213,6 +1799,15 @@ class _TenderItemAssignmentSectionState
     SupplierItemOffer offer,
     String assignmentType,
   ) async {
+    final assignedItemIds = _assignedItemIds(widget.state.itemAssignments);
+    final itemAssigned = assignedItemIds.contains(offer.itemId);
+    if (itemAssigned && _editingTenderItemId != offer.itemId) {
+      showAppSnackBar(
+        context,
+        message: 'هذه المادة محالة مسبقاً، اضغط تعديل قبل إعادة الإحالة',
+      );
+      return;
+    }
     final result = await showDialog<_ItemAssignmentDraft>(
       context: context,
       builder: (_) =>
@@ -1226,71 +1821,352 @@ class _TenderItemAssignmentSectionState
       note: result.note,
     );
     if (!mounted || !success) return;
+    setState(() => _editingTenderItemId = null);
     showAppSnackBar(context, message: 'تمت إحالة العرض بنجاح');
+  }
+
+  void _startAssignmentEdit(ItemAssignment assignment) {
+    setState(() => _editingTenderItemId = assignment.tenderItemId);
+    showAppSnackBar(
+      context,
+      message: 'اختر عرضاً آخر لنفس المادة من جدول عروض الأسعار',
+    );
+  }
+
+  Set<int> _assignedItemIds(List<ItemAssignment> assignments) {
+    return assignments
+        .map((assignment) => assignment.tenderItemId)
+        .where((itemId) => itemId > 0)
+        .toSet();
   }
 }
 
 class _AssignmentOffersTable extends StatelessWidget {
   const _AssignmentOffersTable({
     required this.offers,
+    required this.assignedItemIds,
+    required this.editingTenderItemId,
     required this.loadingOfferIds,
     required this.onAssign,
+    required this.onEditItem,
   });
 
   final List<SupplierItemOffer> offers;
+  final Set<int> assignedItemIds;
+  final int? editingTenderItemId;
   final Set<int> loadingOfferIds;
+  final void Function(SupplierItemOffer offer, String assignmentType) onAssign;
+  final ValueChanged<int> onEditItem;
+
+  @override
+  Widget build(BuildContext context) {
+    final primaryItems = _primaryItems();
+    final suppliers = _suppliers();
+    if (primaryItems.isEmpty) {
+      return const Text(
+        'لا توجد مواد أساسية لعرضها في جدول الإحالة.',
+        style: TextStyle(color: AppColors.muted),
+      );
+    }
+    return _HorizontalTableScroll(
+      minWidth: 220 + (primaryItems.length * 340),
+      child: DataTable(
+        dataRowMinHeight: 112,
+        dataRowMaxHeight: 360,
+        columns: [
+          const DataColumn(label: Text('الشركات')),
+          ...primaryItems.map(
+            (item) => DataColumn(
+              label: SizedBox(
+                width: 300,
+                child: Text(
+                  '${item.itemNo ?? item.itemId} - ${item.description ?? 'مادة'}',
+                ),
+              ),
+            ),
+          ),
+        ],
+        rows: suppliers.map((supplier) {
+          return DataRow(
+            cells: [
+              DataCell(
+                SizedBox(
+                  width: 180,
+                  child: Text(
+                    supplier.name,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              ...primaryItems.map((item) {
+                final cellOffers = _offersFor(
+                  supplierId: supplier.id,
+                  itemId: item.itemId,
+                );
+                final itemAssigned = assignedItemIds.contains(item.itemId);
+                final canEditAssignedItem = editingTenderItemId == item.itemId;
+                return DataCell(
+                  _AssignmentMatrixCell(
+                    offers: cellOffers,
+                    itemAssigned: itemAssigned,
+                    canEditAssignedItem: canEditAssignedItem,
+                    loadingOfferIds: loadingOfferIds,
+                    onAssign: onAssign,
+                    onEditItem: () => onEditItem(item.itemId),
+                  ),
+                );
+              }),
+            ],
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  List<SupplierItemOffer> _primaryItems() {
+    final byItemId = <int, SupplierItemOffer>{};
+    for (final offer in offers) {
+      if (!offer.hasAlternative) {
+        byItemId.putIfAbsent(offer.itemId, () => offer);
+      }
+    }
+    return byItemId.values.toList();
+  }
+
+  List<_AssignmentSupplierRow> _suppliers() {
+    final bySupplierId = <int, _AssignmentSupplierRow>{};
+    for (final offer in offers) {
+      bySupplierId.putIfAbsent(
+        offer.supplierId,
+        () => _AssignmentSupplierRow(
+          id: offer.supplierId,
+          name: offer.supplierName ?? 'شركة ${offer.supplierId}',
+        ),
+      );
+    }
+    return bySupplierId.values.toList();
+  }
+
+  List<SupplierItemOffer> _offersFor({
+    required int supplierId,
+    required int itemId,
+  }) {
+    final matching = offers
+        .where(
+          (offer) => offer.supplierId == supplierId && offer.itemId == itemId,
+        )
+        .toList();
+    matching.sort((a, b) {
+      if (a.hasAlternative == b.hasAlternative) return a.id.compareTo(b.id);
+      return a.hasAlternative ? 1 : -1;
+    });
+    return matching;
+  }
+}
+
+class _AssignmentSupplierRow {
+  const _AssignmentSupplierRow({required this.id, required this.name});
+
+  final int id;
+  final String name;
+}
+
+class _AssignmentMatrixCell extends StatelessWidget {
+  const _AssignmentMatrixCell({
+    required this.offers,
+    required this.itemAssigned,
+    required this.canEditAssignedItem,
+    required this.loadingOfferIds,
+    required this.onAssign,
+    required this.onEditItem,
+  });
+
+  final List<SupplierItemOffer> offers;
+  final bool itemAssigned;
+  final bool canEditAssignedItem;
+  final Set<int> loadingOfferIds;
+  final void Function(SupplierItemOffer offer, String assignmentType) onAssign;
+  final VoidCallback onEditItem;
+
+  @override
+  Widget build(BuildContext context) {
+    final disabled = itemAssigned && !canEditAssignedItem;
+    final backgroundColor = itemAssigned
+        ? canEditAssignedItem
+              ? AppColors.teal.withValues(alpha: .08)
+              : AppColors.border.withValues(alpha: .35)
+        : AppColors.surface;
+    return Container(
+      width: 320,
+      padding: EdgeInsets.all(10.r),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        border: Border.all(
+          color: canEditAssignedItem
+              ? AppColors.teal.withValues(alpha: .45)
+              : AppColors.border,
+        ),
+        borderRadius: BorderRadius.circular(16.r),
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (disabled) ...[
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'المادة محالة مسبقاً',
+                      style: TextStyle(
+                        color: AppColors.muted,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 6.h),
+              OutlinedButton.icon(
+                onPressed: onEditItem,
+                icon: const Icon(Icons.edit_outlined, size: 18),
+                label: const Text('تفعيل التعديل'),
+              ),
+              SizedBox(height: 8.h),
+            ],
+            if (offers.isEmpty)
+              const Text(
+                'لا يوجد عرض لهذه الشركة',
+                style: TextStyle(color: AppColors.muted),
+              )
+            else
+              ...offers.map(
+                (offer) => Padding(
+                  padding: EdgeInsets.only(bottom: 8.h),
+                  child: _AssignmentOfferCard(
+                    offer: offer,
+                    loading: loadingOfferIds.contains(offer.id),
+                    enabled: !disabled,
+                    editing: canEditAssignedItem,
+                    onAssign: onAssign,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AssignmentOfferCard extends StatelessWidget {
+  const _AssignmentOfferCard({
+    required this.offer,
+    required this.loading,
+    required this.enabled,
+    required this.editing,
+    required this.onAssign,
+  });
+
+  final SupplierItemOffer offer;
+  final bool loading;
+  final bool enabled;
+  final bool editing;
   final void Function(SupplierItemOffer offer, String assignmentType) onAssign;
 
   @override
   Widget build(BuildContext context) {
-    return _HorizontalTableScroll(
-      minWidth: 1180,
-      child: DataTable(
-        columns: const [
-          DataColumn(label: Text('المورد')),
-          DataColumn(label: Text('رقم المادة')),
-          DataColumn(label: Text('الوصف')),
-          DataColumn(label: Text('السعر')),
-          DataColumn(label: Text('بديل')),
-          DataColumn(label: Text('الملاحظة')),
-          DataColumn(label: Text('إحالة فنية')),
-          DataColumn(label: Text('إحالة رئيسية')),
-        ],
-        rows: offers.map((offer) {
-          final loading = loadingOfferIds.contains(offer.id);
-          return DataRow(
-            cells: [
-              DataCell(Text(offer.supplierName ?? '-')),
-              DataCell(Text(offer.itemNo ?? offer.itemId.toString())),
-              DataCell(
-                SizedBox(width: 220, child: Text(offer.description ?? '-')),
-              ),
-              DataCell(Text(offer.price?.toString() ?? '-')),
-              DataCell(Text(offer.hasAlternative ? 'نعم' : 'لا')),
-              DataCell(SizedBox(width: 180, child: Text(offer.note ?? '-'))),
-              DataCell(
-                _AssignmentTableButton(
-                  label: 'إحالة فنية',
-                  icon: Icons.engineering_outlined,
-                  loading: loading,
-                  filled: false,
-                  color: AppColors.teal,
-                  onPressed: () => onAssign(offer, 'TEC'),
+    final label = offer.hasAlternative ? 'بديل' : 'أساسي';
+    final labelColor = offer.hasAlternative ? AppColors.gold : AppColors.teal;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(10.r),
+      decoration: BoxDecoration(
+        color: offer.hasAlternative
+            ? AppColors.gold.withValues(alpha: .08)
+            : Colors.white,
+        border: Border.all(color: labelColor.withValues(alpha: .25)),
+        borderRadius: BorderRadius.circular(14.r),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
+                decoration: BoxDecoration(
+                  color: labelColor.withValues(alpha: .12),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: labelColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
-              DataCell(
-                _AssignmentTableButton(
-                  label: 'إحالة رئيسية',
-                  icon: Icons.verified_outlined,
-                  loading: loading,
-                  filled: true,
-                  color: AppColors.deepBlue,
-                  onPressed: () => onAssign(offer, 'MAIN'),
-                ),
+              const Spacer(),
+              Text(
+                'السعر: ${offer.price?.toString() ?? '-'}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
               ),
             ],
-          );
-        }).toList(),
+          ),
+          SizedBox(height: 8.h),
+          Text(
+            offer.hasAlternative
+                ? offer.alternativeDescription ?? offer.description ?? '-'
+                : offer.description ?? '-',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          SizedBox(height: 4.h),
+          Text(
+            'سعر الوحدة: ${offer.unitPrice?.toString() ?? '-'} | بلد المنشأ: ${offer.origin ?? '-'}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
+          if ((offer.note ?? '').trim().isNotEmpty) ...[
+            SizedBox(height: 4.h),
+            Text(
+              offer.note!,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+          ],
+          SizedBox(height: 10.h),
+          Wrap(
+            spacing: 8.w,
+            runSpacing: 8.h,
+            children: [
+              _AssignmentTableButton(
+                label: editing ? 'تعديل فنية' : 'فنية',
+                icon: Icons.engineering_outlined,
+                loading: loading,
+                filled: false,
+                color: AppColors.teal,
+                enabled: enabled,
+                onPressed: () => onAssign(offer, 'TEC'),
+              ),
+              _AssignmentTableButton(
+                label: editing ? 'تعديل رئيسية' : 'رئيسية',
+                icon: Icons.verified_outlined,
+                loading: loading,
+                filled: true,
+                color: AppColors.deepBlue,
+                enabled: enabled,
+                onPressed: () => onAssign(offer, 'MAIN'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -1303,6 +2179,7 @@ class _AssignmentTableButton extends StatelessWidget {
     required this.loading,
     required this.filled,
     required this.color,
+    required this.enabled,
     required this.onPressed,
   });
 
@@ -1311,6 +2188,7 @@ class _AssignmentTableButton extends StatelessWidget {
   final bool loading;
   final bool filled;
   final Color color;
+  final bool enabled;
   final VoidCallback onPressed;
 
   @override
@@ -1354,13 +2232,13 @@ class _AssignmentTableButton extends StatelessWidget {
           );
     if (filled) {
       return ElevatedButton(
-        onPressed: loading ? null : onPressed,
+        onPressed: loading || !enabled ? null : onPressed,
         style: style,
         child: child,
       );
     }
     return OutlinedButton(
-      onPressed: loading ? null : onPressed,
+      onPressed: loading || !enabled ? null : onPressed,
       style: style,
       child: child,
     );
@@ -1368,9 +2246,13 @@ class _AssignmentTableButton extends StatelessWidget {
 }
 
 class _ItemAssignmentsTable extends StatelessWidget {
-  const _ItemAssignmentsTable({required this.assignments});
+  const _ItemAssignmentsTable({
+    required this.assignments,
+    required this.onEdit,
+  });
 
   final List<ItemAssignment> assignments;
+  final ValueChanged<ItemAssignment> onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -1379,6 +2261,7 @@ class _ItemAssignmentsTable extends StatelessWidget {
       child: DataTable(
         columns: const [
           DataColumn(label: Text('المورد')),
+          DataColumn(label: Text('معرف المادة')),
           DataColumn(label: Text('نوع الإحالة')),
           DataColumn(label: Text('سعر العرض')),
           DataColumn(label: Text('السعر المحال')),
@@ -1386,12 +2269,14 @@ class _ItemAssignmentsTable extends StatelessWidget {
           DataColumn(label: Text('ملاحظة العرض')),
           DataColumn(label: Text('ملاحظة الإحالة')),
           DataColumn(label: Text('تاريخ الإحالة')),
+          DataColumn(label: Text('تعديل')),
         ],
         rows: assignments
             .map(
               (assignment) => DataRow(
                 cells: [
                   DataCell(Text(assignment.supplierName ?? '-')),
+                  DataCell(Text(assignment.tenderItemId.toString())),
                   DataCell(Text(assignment.isTechnical ? 'فنية' : 'رئيسية')),
                   DataCell(Text(assignment.price?.toString() ?? '-')),
                   DataCell(Text(assignment.assignedPrice?.toString() ?? '-')),
@@ -1410,6 +2295,13 @@ class _ItemAssignmentsTable extends StatelessWidget {
                   ),
                   DataCell(
                     Text(AppDateFormatter.dateTime(assignment.createdAt)),
+                  ),
+                  DataCell(
+                    OutlinedButton.icon(
+                      onPressed: () => onEdit(assignment),
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      label: const Text('تعديل'),
+                    ),
                   ),
                 ],
               ),
@@ -1516,17 +2408,17 @@ class _ItemAssignmentDialogState extends State<_ItemAssignmentDialog> {
 }
 
 class AttachmentsSection extends StatelessWidget {
-  const AttachmentsSection({
-    super.key,
-    required this.tender,
-    required this.progress,
-  });
+  const AttachmentsSection({super.key, required this.state});
 
-  final TenderDetails tender;
-  final double? progress;
+  final TenderDetailsState state;
+
+  TenderDetails get tender => state.tender!;
 
   @override
   Widget build(BuildContext context) {
+    final progress = state.uploadProgress;
+    final isUploading = state.actionLoading && progress != null;
+
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1537,15 +2429,19 @@ class AttachmentsSection extends StatelessWidget {
           ),
           SizedBox(height: 16.h),
           InkWell(
-            onTap: () async {
-              final result = await FilePicker.platform.pickFiles(
-                allowMultiple: true,
-                withData: true,
-              );
-              if (result != null && context.mounted) {
-                context.read<TenderDetailsCubit>().uploadFiles(result.files);
-              }
-            },
+            onTap: isUploading
+                ? null
+                : () async {
+                    final result = await FilePicker.platform.pickFiles(
+                      allowMultiple: true,
+                      withData: true,
+                    );
+                    if (result != null && context.mounted) {
+                      context.read<TenderDetailsCubit>().uploadFiles(
+                        result.files,
+                      );
+                    }
+                  },
             borderRadius: BorderRadius.circular(22),
             child: Container(
               width: double.infinity,
@@ -1595,8 +2491,11 @@ class AttachmentsSection extends StatelessWidget {
                     style: TextStyle(color: AppColors.muted),
                   )
                 else
-                  ...tender.attachments.map(
-                    (file) => ListTile(
+                  ...tender.attachments.map((file) {
+                    final isDeleting =
+                        file.id != null &&
+                        state.deletingAttachmentIds.contains(file.id);
+                    return ListTile(
                       contentPadding: EdgeInsets.zero,
                       leading: Icon(
                         _fileIcon(file.type ?? file.name),
@@ -1608,23 +2507,39 @@ class AttachmentsSection extends StatelessWidget {
                       ),
                       trailing: Wrap(
                         spacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           IconButton(
-                            onPressed: file.url == null
+                            onPressed: file.id == null || isDeleting
                                 ? null
-                                : () => _openAttachment(file.url!),
+                                : () => _openAttachment(context, file),
                             icon: const Icon(Icons.open_in_new),
                             tooltip: 'فتح الملف',
                           ),
-                          IconButton(
-                            onPressed: () {},
-                            icon: const Icon(Icons.delete_outline),
-                            tooltip: 'حذف اختياري',
-                          ),
+                          if (isDeleting)
+                            SizedBox(
+                              width: 24.r,
+                              height: 24.r,
+                              child: const CircularProgressIndicator(
+                                strokeWidth: 2.4,
+                              ),
+                            )
+                          else
+                            IconButton(
+                              onPressed: file.id == null
+                                  ? null
+                                  : () => _confirmAndDeleteAttachment(
+                                      context,
+                                      file,
+                                    ),
+                              icon: const Icon(Icons.delete_outline),
+                              tooltip: 'حذف الملف',
+                              color: AppColors.danger,
+                            ),
                         ],
                       ),
-                    ),
-                  ),
+                    );
+                  }),
               ],
             ),
           ),
@@ -1644,10 +2559,98 @@ class AttachmentsSection extends StatelessWidget {
     return Icons.insert_drive_file_outlined;
   }
 
-  void _openAttachment(String url) {
-    final serverBaseUrl = AppConstants.apiBaseUrl.replaceFirst('/api', '');
-    final fullUrl = url.startsWith('http') ? url : '$serverBaseUrl$url';
-    html.window.open(fullUrl, '_blank');
+  Future<void> _openAttachment(
+    BuildContext context,
+    TenderAttachment file,
+  ) async {
+    final attachmentId = file.id;
+    if (attachmentId == null) return;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('جاري تحميل الملف...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      await AuthenticatedFileOpener.openAttachment(
+        sl(),
+        attachmentId: attachmentId,
+        fileName: file.name,
+      );
+    } on AppException catch (error) {
+      if (context.mounted) {
+        showAppSnackBar(context, message: error.message, isError: true);
+      }
+    } catch (_) {
+      if (context.mounted) {
+        showAppSnackBar(context, message: 'تعذر فتح الملف', isError: true);
+      }
+    } finally {
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+    }
+  }
+
+  Future<void> _confirmAndDeleteAttachment(
+    BuildContext context,
+    TenderAttachment file,
+  ) async {
+    final attachmentId = file.id;
+    if (attachmentId == null) return;
+
+    final fileName = file.name?.trim().isNotEmpty == true
+        ? file.name!.trim()
+        : 'هذا الملف';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('تأكيد الحذف'),
+        content: Text(
+          'هل أنت متأكد من حذف "$fileName"؟\nلا يمكن التراجع عن هذا الإجراء.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.danger,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('حذف'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !context.mounted) return;
+
+    final deleted = await context.read<TenderDetailsCubit>().deleteAttachment(
+      attachmentId,
+    );
+
+    if (deleted && context.mounted) {
+      showAppSnackBar(context, message: 'تم حذف المرفق بنجاح');
+    }
   }
 }
 

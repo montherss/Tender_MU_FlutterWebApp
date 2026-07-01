@@ -140,6 +140,7 @@ class TenderDetailsState extends Equatable {
     this.itemAssignments = const [],
     this.itemAssignmentsLoading = false,
     this.loadingItemAssignments = const {},
+    this.deletingAttachmentIds = const {},
   });
 
   final ViewStatus status;
@@ -159,6 +160,7 @@ class TenderDetailsState extends Equatable {
   final List<ItemAssignment> itemAssignments;
   final bool itemAssignmentsLoading;
   final Set<int> loadingItemAssignments;
+  final Set<int> deletingAttachmentIds;
 
   List<TenderItem> get filteredItems {
     final all = tender?.items ?? const [];
@@ -200,6 +202,7 @@ class TenderDetailsState extends Equatable {
     List<ItemAssignment>? itemAssignments,
     bool? itemAssignmentsLoading,
     Set<int>? loadingItemAssignments,
+    Set<int>? deletingAttachmentIds,
   }) {
     return TenderDetailsState(
       status: status ?? this.status,
@@ -225,6 +228,8 @@ class TenderDetailsState extends Equatable {
           itemAssignmentsLoading ?? this.itemAssignmentsLoading,
       loadingItemAssignments:
           loadingItemAssignments ?? this.loadingItemAssignments,
+      deletingAttachmentIds:
+          deletingAttachmentIds ?? this.deletingAttachmentIds,
     );
   }
 
@@ -247,6 +252,7 @@ class TenderDetailsState extends Equatable {
     itemAssignments,
     itemAssignmentsLoading,
     loadingItemAssignments,
+    deletingAttachmentIds,
   ];
 }
 
@@ -331,6 +337,33 @@ class TenderDetailsCubit extends Cubit<TenderDetailsState> {
           errorMessage: error.message,
         ),
       );
+    }
+  }
+
+  Future<bool> deleteAttachment(int attachmentId) async {
+    final tender = state.tender;
+    if (tender == null) return false;
+
+    final deleting = {...state.deletingAttachmentIds, attachmentId};
+    emit(state.copyWith(deletingAttachmentIds: deleting, errorMessage: null));
+
+    try {
+      await _repository.deleteAttachment(attachmentId);
+      await refreshTender();
+      final clearedDeleting = Set<int>.from(state.deletingAttachmentIds)
+        ..remove(attachmentId);
+      emit(state.copyWith(deletingAttachmentIds: clearedDeleting));
+      return true;
+    } on AppException catch (error) {
+      final clearedDeleting = Set<int>.from(state.deletingAttachmentIds)
+        ..remove(attachmentId);
+      emit(
+        state.copyWith(
+          deletingAttachmentIds: clearedDeleting,
+          errorMessage: error.message,
+        ),
+      );
+      return false;
     }
   }
 
@@ -488,6 +521,8 @@ class TenderDetailsCubit extends Cubit<TenderDetailsState> {
     required int supplierId,
     required int tenderItemId,
     required num price,
+    String? origin,
+    required num unitPrice,
     String? note,
     required bool isAlternative,
     String? alternativeDescription,
@@ -502,6 +537,8 @@ class TenderDetailsCubit extends Cubit<TenderDetailsState> {
           supplierId: supplierId,
           tenderItemId: tenderItemId,
           price: price,
+          origin: origin,
+          unitPrice: unitPrice,
           note: note,
           isAlternative: isAlternative ? 1 : 0,
           alternativeDescription: isAlternative ? alternativeDescription : null,

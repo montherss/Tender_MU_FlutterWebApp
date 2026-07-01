@@ -199,8 +199,7 @@ class _DetailsTabsState extends State<_DetailsTabs>
                 _tab(
                   AttachmentsSection(
                     key: ValueKey('attachments-${widget.tender.hashCode}'),
-                    tender: widget.tender,
-                    progress: widget.state.uploadProgress,
+                    state: widget.state,
                   ),
                 ),
               ],

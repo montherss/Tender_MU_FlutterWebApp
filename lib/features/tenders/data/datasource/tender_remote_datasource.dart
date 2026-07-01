@@ -68,6 +68,13 @@ class TenderRemoteDataSource {
     );
   }
 
+  Future<void> deleteAttachment(int id) async {
+    await _dio.delete(
+      '/attachments/deleteAttachment',
+      data: FormData.fromMap({'id': id}),
+    );
+  }
+
   Future<void> addTenderCategoryAndType(
     int tenderId,
     String category,
@@ -136,6 +143,18 @@ class TenderRemoteDataSource {
     );
     final list = _responseList(response.data);
     return list.map((e) => SupplierItemOfferModel.fromJson(_asMap(e))).toList();
+  }
+
+  Future<TenderAnalysis> getAnalysisByTenderId(int tenderId) async {
+    final response = await _dio.post(
+      '/Suppliers/getAnalysisByTenderId',
+      data: FormData.fromMap({'tenderId': tenderId}),
+      options: Options(
+        receiveTimeout: const Duration(minutes: 5),
+        sendTimeout: const Duration(minutes: 2),
+      ),
+    );
+    return TenderAnalysisModel.fromJson(_asMap(response.data));
   }
 
   Future<List<SupplierItemOffer>> addSupplierItemOffer(
