@@ -83,8 +83,8 @@ class TenderRepositoryImpl implements TenderRepository {
   }
 
   @override
-  Future<List<Supplier>> getSuppliers({int page = 0, int size = 5}) {
-    return _guard(() => _remoteDataSource.getSuppliers(page: page, size: size));
+  Future<List<Supplier>> searchSuppliers(String name) {
+    return _guard(() => _remoteDataSource.searchSuppliers(name));
   }
 
   @override

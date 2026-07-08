@@ -49,6 +49,7 @@ dependencies:
   flutter_launcher_icons: ^0.14.4
   msix: ^3.16.13
   window_manager: ^0.3.8
+  syncfusion_flutter_xlsio: ^29.2.11
 
 
 dev_dependencies:

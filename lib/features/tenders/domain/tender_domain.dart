@@ -600,7 +600,7 @@ abstract class TenderRepository {
   Future<void> updateBasicInfo(int tenderId, BasicInfoRequest request);
   Future<void> changeTechnicalAssignment(int itemId, int value);
   Future<void> changeMainAssignment(int itemId, int value);
-  Future<List<Supplier>> getSuppliers({int page = 0, int size = 5});
+  Future<List<Supplier>> searchSuppliers(String name);
   Future<List<Supplier>> getSuppliersByTenderId(int tenderId);
   Future<void> addSupplierToTender({
     required int tenderId,

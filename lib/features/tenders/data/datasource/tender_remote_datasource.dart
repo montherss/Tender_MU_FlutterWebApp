@@ -108,10 +108,10 @@ class TenderRemoteDataSource {
     );
   }
 
-  Future<List<Supplier>> getSuppliers({int page = 0, int size = 5}) async {
+  Future<List<Supplier>> searchSuppliers(String name) async {
     final response = await _dio.get(
-      '/Suppliers',
-      queryParameters: {'page': page, 'size': size},
+      '/Suppliers/search',
+      queryParameters: {'name': name},
     );
     final list = _responseList(response.data);
     return list.map((e) => SupplierModel.fromJson(_asMap(e))).toList();

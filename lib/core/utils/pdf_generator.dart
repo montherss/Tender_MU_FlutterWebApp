@@ -233,6 +233,286 @@ class TenderPdfGenerator {
     return doc.save();
   }
 
+  static Future<Uint8List> companiesAssignmentPdf(
+    TenderDetails tender,
+    List<Supplier> suppliers,
+    List<ItemAssignment> assignments,
+  ) async {
+    final theme = await _arabicPdfTheme();
+    final logo = await _pdfLogo();
+    final doc = pw.Document();
+    final supplierNames = _assignmentSupplierNames(suppliers, assignments)
+        .where(
+          (name) =>
+              assignments.any((assignment) => assignment.supplierName == name),
+        )
+        .toList();
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
+        theme: theme,
+        textDirection: pw.TextDirection.rtl,
+        margin: const pw.EdgeInsets.symmetric(horizontal: 26, vertical: 22),
+        maxPages: 200,
+        header: (_) => _compactUniversityHeader(logo),
+        footer: (context) => pw.Container(
+          alignment: pw.Alignment.center,
+          padding: const pw.EdgeInsets.only(top: 7),
+          decoration: const pw.BoxDecoration(
+            border: pw.Border(top: pw.BorderSide(width: .5)),
+          ),
+          child: pw.Text(
+            'صفحة ${context.pageNumber} من ${context.pagesCount}',
+            style: const pw.TextStyle(fontSize: 9),
+          ),
+        ),
+        build: (context) => [
+          _sectionTitle('كشف إحالة الشركات'),
+          pw.SizedBox(height: 8),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Text(
+                'رقم العطاء: ${tender.tenderNo ?? tender.id}',
+                style: pw.TextStyle(
+                  fontSize: 10,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.Text(
+                tender.subject ?? 'موضوع العطاء غير محدد',
+                style: const pw.TextStyle(fontSize: 10),
+              ),
+              pw.Text(
+                'تاريخ الطباعة: ${AppDateFormatter.dateTime(DateTime.now())}',
+                style: const pw.TextStyle(fontSize: 9),
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 12),
+          _companiesAssignmentTable(tender, supplierNames, assignments),
+        ],
+      ),
+    );
+    return doc.save();
+  }
+
+  static pw.Widget _companiesAssignmentTable(
+    TenderDetails tender,
+    List<String> supplierNames,
+    List<ItemAssignment> assignments,
+  ) {
+    if (supplierNames.isEmpty) {
+      return _emptySupplierAssignmentBlock(
+        'لا توجد مواد محالة على أي شركة بعد.',
+      );
+    }
+
+    return pw.Table(
+      border: pw.TableBorder.all(width: .6),
+      columnWidths: _companyAssignmentColumnWidths,
+      children: [
+        pw.TableRow(
+          decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+          children: [
+            _pdfHeaderCell('الكمية'),
+            _pdfHeaderCell('الوصف'),
+            _pdfHeaderCell('رقم المادة'),
+            _pdfHeaderCell('الإجمالي للمادة'),
+            _pdfHeaderCell('إجمالي القيمة'),
+            _pdfHeaderCell('عدد المواد'),
+            _pdfHeaderCell('اسم الشركة'),
+            _pdfHeaderCell('#'),
+          ],
+        ),
+        ...supplierNames.asMap().entries.map((entry) {
+          final supplierName = entry.value;
+          final supplierAssignments = assignments
+              .where((assignment) => assignment.supplierName == supplierName)
+              .toList();
+          return pw.TableRow(
+            children: [
+              _pdfWidgetCell(
+                _companyAssignmentColumn(
+                  supplierAssignments,
+                  (assignment) =>
+                      _companyAssignmentQuantityLine(tender, assignment),
+                ),
+              ),
+              _pdfWidgetCell(
+                _companyAssignmentColumn(
+                  supplierAssignments,
+                  (assignment) =>
+                      _companyAssignmentDescriptionLine(tender, assignment),
+                ),
+              ),
+              _pdfWidgetCell(
+                _companyAssignmentColumn(
+                  supplierAssignments,
+                  (assignment) => _companyAssignmentItemNo(tender, assignment),
+                ),
+              ),
+              _pdfWidgetCell(
+                _companyAssignmentColumn(
+                  supplierAssignments,
+                  (assignment) => _formatPdfNumber(assignment.price),
+                ),
+              ),
+              _pdfTextCell(_companyAssignmentsTotal(supplierAssignments)),
+              _pdfTextCell('${supplierAssignments.length}'),
+              _pdfTextCell(supplierName),
+              _pdfTextCell('${entry.key + 1}'),
+            ],
+          );
+        }),
+        _companiesGrandTotalRow(supplierNames, assignments),
+      ],
+    );
+  }
+
+  static pw.TableRow _companiesGrandTotalRow(
+    List<String> supplierNames,
+    List<ItemAssignment> assignments,
+  ) {
+    num total = 0;
+    var hasValue = false;
+    var itemCount = 0;
+    for (final supplierName in supplierNames) {
+      final supplierAssignments = assignments
+          .where((assignment) => assignment.supplierName == supplierName)
+          .toList();
+      itemCount += supplierAssignments.length;
+      for (final assignment in supplierAssignments) {
+        if (assignment.price != null) {
+          total += assignment.price!;
+          hasValue = true;
+        }
+      }
+    }
+
+    return pw.TableRow(
+      decoration: const pw.BoxDecoration(color: PdfColors.grey300),
+      children: [
+        _pdfHeaderCell(''),
+        _pdfHeaderCell('الإجمالي الكلي لجميع الشركات'),
+        _pdfHeaderCell(''),
+        _pdfHeaderCell(''),
+        _pdfHeaderCell(hasValue ? _formatPdfNumber(total) : '-'),
+        _pdfHeaderCell('$itemCount'),
+        _pdfHeaderCell(''),
+        _pdfHeaderCell(''),
+      ],
+    );
+  }
+
+  static Map<int, pw.TableColumnWidth> get _companyAssignmentColumnWidths =>
+      const {
+        0: pw.FixedColumnWidth(66),
+        1: pw.FlexColumnWidth(5),
+        2: pw.FixedColumnWidth(58),
+        3: pw.FixedColumnWidth(64),
+        4: pw.FixedColumnWidth(72),
+        5: pw.FixedColumnWidth(55),
+        6: pw.FixedColumnWidth(100),
+        7: pw.FixedColumnWidth(26),
+      };
+
+  static String _companyAssignmentsTotal(List<ItemAssignment> assignments) {
+    if (assignments.isEmpty) return '-';
+    num total = 0;
+    var hasValue = false;
+    for (final assignment in assignments) {
+      if (assignment.price != null) {
+        total += assignment.price!;
+        hasValue = true;
+      }
+    }
+    return hasValue ? _formatPdfNumber(total) : '-';
+  }
+
+  static pw.Widget _companyAssignmentColumn(
+    List<ItemAssignment> assignments,
+    String Function(ItemAssignment assignment) lineBuilder,
+  ) {
+    if (assignments.isEmpty) {
+      return pw.Text('-', style: const pw.TextStyle(fontSize: 9));
+    }
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+      children: assignments.asMap().entries.map((entry) {
+        final line = lineBuilder(entry.value);
+        final isLast = entry.key == assignments.length - 1;
+        return pw.Padding(
+          padding: pw.EdgeInsets.only(bottom: isLast ? 0 : 4),
+          child: pw.Text(
+            line,
+            textAlign: pw.TextAlign.right,
+            style: _pdfCellTextStyle(line),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  static String _companyAssignmentItemNo(
+    TenderDetails tender,
+    ItemAssignment assignment,
+  ) {
+    final itemIndex = tender.items.indexWhere(
+      (item) => item.id == assignment.tenderItemId,
+    );
+    final item = itemIndex == -1 ? null : tender.items[itemIndex];
+    final itemNo = item?.itemNo ?? assignment.tenderItemId.toString();
+    return _normalizePdfText(itemNo);
+  }
+
+  static String _companyAssignmentDescriptionLine(
+    TenderDetails tender,
+    ItemAssignment assignment,
+  ) {
+    final itemIndex = tender.items.indexWhere(
+      (item) => item.id == assignment.tenderItemId,
+    );
+    final item = itemIndex == -1 ? null : tender.items[itemIndex];
+    final description = item?.description?.trim();
+    return _normalizePdfText(
+      description == null || description.isEmpty ? '-' : description,
+    );
+  }
+
+  static String _companyAssignmentQuantityLine(
+    TenderDetails tender,
+    ItemAssignment assignment,
+  ) {
+    final itemIndex = tender.items.indexWhere(
+      (item) => item.id == assignment.tenderItemId,
+    );
+    final item = itemIndex == -1 ? null : tender.items[itemIndex];
+    final quantity = assignment.quantity ?? item?.quantity;
+    final unit = _assignmentUnit(tender, assignment);
+    return _normalizePdfText('الكمية: ${_formatPdfNumber(quantity)} $unit');
+  }
+
+  static String _formatPdfNumber(num? value) {
+    if (value == null) return '-';
+    final rounded = double.parse(value.toStringAsFixed(3));
+    if (rounded == rounded.roundToDouble()) {
+      return rounded.toInt().toString();
+    }
+    var text = rounded.toStringAsFixed(3);
+    text = text.replaceFirst(RegExp(r'0+$'), '');
+    text = text.replaceFirst(RegExp(r'\.$'), '');
+    return text;
+  }
+
+  static pw.Widget _pdfWidgetCell(pw.Widget child) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+      child: child,
+    );
+  }
+
   static List<String> _assignmentSupplierNames(
     List<Supplier> suppliers,
     List<ItemAssignment> assignments,
@@ -536,12 +816,13 @@ class TenderPdfGenerator {
       offersByItem.putIfAbsent(offer.itemId, () => []).add(offer);
     }
 
+    final sortedItems = _sortedTenderItems(tender.items);
     final sections = <pw.Widget>[];
     final processedItemIds = <int>{};
     var sectionIndex = 0;
 
-    for (var index = 0; index < tender.items.length; index++) {
-      final item = tender.items[index];
+    for (var index = 0; index < sortedItems.length; index++) {
+      final item = sortedItems[index];
       final itemId = item.id;
       if (itemId == null) continue;
 
@@ -592,6 +873,19 @@ class TenderPdfGenerator {
     }
 
     return sections;
+  }
+
+  static List<TenderItem> _sortedTenderItems(List<TenderItem> items) {
+    final sorted = [...items];
+    sorted.sort((a, b) {
+      final aNo = num.tryParse(a.itemNo?.trim() ?? '');
+      final bNo = num.tryParse(b.itemNo?.trim() ?? '');
+      if (aNo != null && bNo != null) return aNo.compareTo(bNo);
+      if (aNo != null) return -1;
+      if (bNo != null) return 1;
+      return (a.itemNo ?? '').compareTo(b.itemNo ?? '');
+    });
+    return sorted;
   }
 
   static String _offersSummaryText(
@@ -1155,6 +1449,9 @@ class TenderPdfGenerator {
   static pw.Widget _itemSupplierOffersTable(
     List<List<SupplierItemOffer>> supplierGroups,
   ) {
+    final primaryOffers = supplierGroups.map(_primaryOffer).toList();
+    final lowestPriceOfferId = _lowestPriceOfferId(primaryOffers);
+
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.stretch,
       children: [
@@ -1193,11 +1490,26 @@ class TenderPdfGenerator {
               offer: offerEntry.value,
               primary: primary,
               rowLabel: '${groupEntry.key + 1}.${offerEntry.key + 1}',
+              isLowestPrice: offerEntry.value.id == lowestPriceOfferId,
             );
           });
         }),
       ],
     );
+  }
+
+  static int? _lowestPriceOfferId(List<SupplierItemOffer> primaryOffers) {
+    SupplierItemOffer? lowest;
+    num? lowestPrice;
+    for (final offer in primaryOffers) {
+      final price = offer.price ?? _calculatedTotalPrice(offer);
+      if (price == null) continue;
+      if (lowestPrice == null || price < lowestPrice) {
+        lowestPrice = price;
+        lowest = offer;
+      }
+    }
+    return lowest?.id;
   }
 
   static Map<int, pw.TableColumnWidth> get _offerTableColumnWidths => const {
@@ -1216,17 +1528,18 @@ class TenderPdfGenerator {
     required SupplierItemOffer offer,
     required SupplierItemOffer primary,
     required String rowLabel,
+    bool isLowestPrice = false,
   }) {
     final originParts = _splitTableCellText(
-      _offerOriginLine(offer),
+      _truncateForPdf(_offerOriginLine(offer), 320),
       chunkSize: 80,
     );
     final descriptionParts = _splitTableCellText(
-      _offerDescriptionLine(offer, primary),
+      _truncateForPdf(_offerDescriptionLine(offer, primary), 1200),
       chunkSize: 210,
     );
     final supplierParts = _splitTableCellText(
-      offer.supplierName ?? primary.supplierName ?? '-',
+      _truncateForPdf(offer.supplierName ?? primary.supplierName ?? '-', 360),
       chunkSize: 90,
     );
     final rowCount = [
@@ -1239,10 +1552,12 @@ class TenderPdfGenerator {
       final isFirst = index == 0;
       return pw.TableRow(
         children: [
-          _pdfTextCell(
-            isFirst ? _offerTotalPriceLine(offer) : '',
-            blankWhenEmpty: true,
-          ),
+          isFirst && isLowestPrice
+              ? _pdfHighlightedTextCell(_offerTotalPriceLine(offer))
+              : _pdfTextCell(
+                  isFirst ? _offerTotalPriceLine(offer) : '',
+                  blankWhenEmpty: true,
+                ),
           _pdfTextCell(
             isFirst ? _offerUnitPriceLine(offer) : '',
             blankWhenEmpty: true,
@@ -1287,7 +1602,7 @@ class TenderPdfGenerator {
     final supplier = offer.supplierName ?? 'مورد #${offer.supplierId}';
     final type = offer.hasAlternative ? 'بديل' : 'أساسي';
     final chunks = _splitTableCellText(
-      'ملاحظة $supplier - $type: $note',
+      _truncateForPdf('ملاحظة $supplier - $type: $note', 900),
       chunkSize: 230,
     );
 
@@ -1341,6 +1656,25 @@ class TenderPdfGenerator {
     );
   }
 
+  static pw.Widget _pdfHighlightedTextCell(String text) {
+    final normalizedText = _normalizePdfText(text);
+    return pw.Container(
+      width: double.infinity,
+      color: PdfColors.black,
+      padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+      child: pw.Text(
+        normalizedText,
+        textAlign: pw.TextAlign.right,
+        style: pw.TextStyle(
+          fontSize: _pdfCellFontSize(normalizedText),
+          lineSpacing: 1.3,
+          color: PdfColors.white,
+          fontWeight: pw.FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
   static pw.Widget _pdfCellText(String text, {bool center = false}) {
     final normalized = _normalizePdfText(text);
     final textAlign = center ? pw.TextAlign.center : pw.TextAlign.right;
@@ -1373,6 +1707,12 @@ class TenderPdfGenerator {
     if (maxChars < 0) return '-';
     final normalized = _normalizePdfText(value);
     return normalized;
+  }
+
+  static String _truncateForPdf(Object? value, int maxChars) {
+    final normalized = _normalizePdfText(value);
+    if (normalized == '-' || normalized.length <= maxChars) return normalized;
+    return '${normalized.substring(0, maxChars - 1).trimRight()}…';
   }
 
   static List<String> _splitTableCellText(

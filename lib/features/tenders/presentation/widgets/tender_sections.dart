@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -8,11 +9,41 @@ import '../../../../core/network/api_client.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/utils/app_utils.dart';
 import '../../../../core/utils/authenticated_file_opener.dart';
+import '../../../../core/utils/excel_generator.dart';
 import '../../../../injection_container.dart';
 import '../../../../core/utils/pdf_generator.dart';
+import '../../../../core/utils/report_export.dart';
 import '../../../../core/widgets/app_widgets.dart';
 import '../../domain/tender_domain.dart';
 import '../cubit/tenders_cubit.dart';
+
+Future<void> _printOrFallbackToExcel(
+  BuildContext context, {
+  required Future<Uint8List> Function() buildPdf,
+  required Future<List<int>> Function() buildExcel,
+  required String pdfFileName,
+  required String excelFileName,
+  bool download = false,
+  String? successMessage,
+}) async {
+  final usedExcelFallback = await exportPdfOrExcel(
+    buildPdf: buildPdf,
+    buildExcel: buildExcel,
+    pdfFileName: pdfFileName,
+    excelFileName: excelFileName,
+    download: download,
+  );
+  if (!context.mounted) return;
+  if (usedExcelFallback) {
+    showAppSnackBar(
+      context,
+      message:
+          'تعذر إنشاء ملف PDF بسبب كبر حجم البيانات، تم إنشاء ملف Excel بنفس التفاصيل بدلاً منه.',
+    );
+  } else if (successMessage != null) {
+    showAppSnackBar(context, message: successMessage);
+  }
+}
 
 class FinancialCommitmentSection extends StatefulWidget {
   const FinancialCommitmentSection({super.key, required this.tender});
@@ -341,9 +372,14 @@ class _ItemsSectionState extends State<ItemsSection> {
                 OutlinedButton.icon(
                   onPressed: widget.tender.items.isEmpty
                       ? null
-                      : () => TenderPdfGenerator.printPdf(
-                          TenderPdfGenerator.itemsPdf(widget.tender),
-                          'items-${widget.tender.id}.pdf',
+                      : () => _printOrFallbackToExcel(
+                          context,
+                          buildPdf: () =>
+                              TenderPdfGenerator.itemsPdf(widget.tender),
+                          buildExcel: () =>
+                              TenderExcelGenerator.itemsExcel(widget.tender),
+                          pdfFileName: 'items-${widget.tender.id}.pdf',
+                          excelFileName: 'items-${widget.tender.id}.xlsx',
                         ),
                   icon: const Icon(Icons.print_outlined),
                   label: const Text('طباعة PDF'),
@@ -379,7 +415,12 @@ class _ItemsSectionState extends State<ItemsSection> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     _topField(_newItem.itemNo, 'رقم المادة', width: 140),
-                    _topField(_newItem.description, 'الوصف', width: 360),
+                    _topField(
+                      _newItem.description,
+                      'الوصف',
+                      width: 360,
+                      multiline: true,
+                    ),
                     _topField(
                       _newItem.quantity,
                       'الكمية',
@@ -531,12 +572,19 @@ class _ItemsSectionState extends State<ItemsSection> {
     String label, {
     double width = 160,
     bool number = false,
+    bool multiline = false,
   }) {
     return SizedBox(
       width: width.w,
       child: TextField(
         controller: controller,
-        keyboardType: number ? TextInputType.number : TextInputType.text,
+        keyboardType: number
+            ? TextInputType.number
+            : multiline
+            ? TextInputType.multiline
+            : TextInputType.text,
+        minLines: multiline ? 3 : 1,
+        maxLines: multiline ? null : 1,
         decoration: InputDecoration(labelText: label),
       ),
     );
@@ -554,27 +602,59 @@ class SuppliersSection extends StatefulWidget {
 
 class _SuppliersSectionState extends State<SuppliersSection> {
   int? _selectedSupplierId;
+  String? _selectedSupplierName;
+  final _supplierSearchController = TextEditingController();
+  final _supplierSearchFocusNode = FocusNode();
+  Timer? _searchDebounce;
 
   @override
-  void didUpdateWidget(covariant SuppliersSection oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final selectedStillExists = widget.state.suppliers.any(
-      (supplier) => supplier.id == _selectedSupplierId,
-    );
-    if (!selectedStillExists) _selectedSupplierId = null;
+  void dispose() {
+    _searchDebounce?.cancel();
+    _supplierSearchController.dispose();
+    _supplierSearchFocusNode.dispose();
+    super.dispose();
+  }
+
+  // Only wired to TextFormField's onChanged (fires on user input), not to
+  // the controller itself — so the programmatic text update on selection
+  // doesn't re-trigger a redundant search.
+  void _onQueryChanged(String query) {
+    if (_selectedSupplierId != null && query != _selectedSupplierName) {
+      setState(() {
+        _selectedSupplierId = null;
+        _selectedSupplierName = null;
+      });
+    } else {
+      setState(() {});
+    }
+
+    _searchDebounce?.cancel();
+    final trimmed = query.trim();
+    final cubit = context.read<TenderDetailsCubit>();
+    if (trimmed.isEmpty) {
+      cubit.clearSupplierSearch();
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 450), () {
+      if (!mounted) return;
+      cubit.searchSuppliers(trimmed);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
     final linkedSuppliers = _uniqueSuppliers(state.tenderSuppliers);
+    final showResultsPanel =
+        _selectedSupplierId == null &&
+        _supplierSearchController.text.trim().isNotEmpty;
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SectionHeader(
             title: 'إضافة مورد للعطاء',
-            subtitle: 'اختر مورداً من القائمة ثم أضفه إلى العطاء الحالي.',
+            subtitle: 'اكتب اسم المورد للبحث عنه ثم أضفه إلى العطاء الحالي.',
             icon: Icons.storefront_outlined,
             trailing: IconButton(
               onPressed: state.suppliersLoading || state.tender == null
@@ -591,10 +671,25 @@ class _SuppliersSectionState extends State<SuppliersSection> {
             const LinearProgressIndicator()
           else
             _AddSupplierForm(
-              suppliers: state.suppliers,
+              searchController: _supplierSearchController,
+              searchFocusNode: _supplierSearchFocusNode,
               selectedSupplierId: _selectedSupplierId,
               addingSupplier: state.addingSupplier,
-              onChanged: (value) => setState(() => _selectedSupplierId = value),
+              showResultsPanel: showResultsPanel,
+              resultsLoading: state.supplierSearchLoading,
+              resultsError: state.supplierSearchError,
+              results: state.supplierSearchResults,
+              onQueryChanged: _onQueryChanged,
+              onSelected: (supplier) => setState(() {
+                _selectedSupplierId = supplier.id;
+                _selectedSupplierName = supplier.displayName;
+                _supplierSearchController.value = TextEditingValue(
+                  text: supplier.displayName,
+                  selection: TextSelection.collapsed(
+                    offset: supplier.displayName.length,
+                  ),
+                );
+              }),
               onAdd: () => _addSupplier(context),
             ),
           SizedBox(height: 18.h),
@@ -629,7 +724,11 @@ class _SuppliersSectionState extends State<SuppliersSection> {
         .read<TenderDetailsCubit>()
         .addSupplierToTender(supplierId);
     if (!context.mounted || !success) return;
-    setState(() => _selectedSupplierId = null);
+    setState(() {
+      _selectedSupplierId = null;
+      _selectedSupplierName = null;
+    });
+    _supplierSearchController.clear();
     showAppSnackBar(context, message: 'تم إضافة المورد بنجاح');
   }
 
@@ -644,17 +743,29 @@ class _SuppliersSectionState extends State<SuppliersSection> {
 
 class _AddSupplierForm extends StatelessWidget {
   const _AddSupplierForm({
-    required this.suppliers,
+    required this.searchController,
+    required this.searchFocusNode,
     required this.selectedSupplierId,
     required this.addingSupplier,
-    required this.onChanged,
+    required this.showResultsPanel,
+    required this.resultsLoading,
+    required this.resultsError,
+    required this.results,
+    required this.onQueryChanged,
+    required this.onSelected,
     required this.onAdd,
   });
 
-  final List<Supplier> suppliers;
+  final TextEditingController searchController;
+  final FocusNode searchFocusNode;
   final int? selectedSupplierId;
   final bool addingSupplier;
-  final ValueChanged<int?> onChanged;
+  final bool showResultsPanel;
+  final bool resultsLoading;
+  final String? resultsError;
+  final List<Supplier> results;
+  final ValueChanged<String> onQueryChanged;
+  final ValueChanged<Supplier> onSelected;
   final VoidCallback onAdd;
 
   @override
@@ -662,29 +773,49 @@ class _AddSupplierForm extends StatelessWidget {
     return Wrap(
       spacing: 12.w,
       runSpacing: 12.h,
-      crossAxisAlignment: WrapCrossAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.start,
       children: [
         SizedBox(
           width: 420.w,
-          child: DropdownButtonFormField<int>(
-            initialValue: selectedSupplierId,
-            items: suppliers
-                .map(
-                  (supplier) => DropdownMenuItem<int>(
-                    value: supplier.id,
-                    child: Text(supplier.displayName),
-                  ),
-                )
-                .toList(),
-            onChanged: addingSupplier || suppliers.isEmpty ? null : onChanged,
-            decoration: const InputDecoration(labelText: 'المورد'),
-            hint: Text(
-              suppliers.isEmpty ? 'لا يوجد موردون متاحون' : 'اختر المورد',
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextFormField(
+                controller: searchController,
+                focusNode: searchFocusNode,
+                enabled: !addingSupplier,
+                onChanged: onQueryChanged,
+                decoration: InputDecoration(
+                  labelText: 'المورد',
+                  hintText: 'اكتب اسم المورد للبحث',
+                  suffixIcon: resultsLoading
+                      ? Padding(
+                          padding: EdgeInsets.all(12.r),
+                          child: const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : const Icon(Icons.search),
+                ),
+              ),
+              if (showResultsPanel) ...[
+                SizedBox(height: 6.h),
+                _SupplierSearchResultsPanel(
+                  loading: resultsLoading,
+                  error: resultsError,
+                  results: results,
+                  onSelected: onSelected,
+                ),
+              ],
+            ],
           ),
         ),
         ElevatedButton.icon(
-          onPressed: addingSupplier || suppliers.isEmpty ? null : onAdd,
+          onPressed: addingSupplier || selectedSupplierId == null
+              ? null
+              : onAdd,
           icon: addingSupplier
               ? const SizedBox(
                   width: 18,
@@ -695,6 +826,83 @@ class _AddSupplierForm extends StatelessWidget {
           label: const Text('إضافة المورد'),
         ),
       ],
+    );
+  }
+}
+
+class _SupplierSearchResultsPanel extends StatelessWidget {
+  const _SupplierSearchResultsPanel({
+    required this.loading,
+    required this.error,
+    required this.results,
+    required this.onSelected,
+  });
+
+  final bool loading;
+  final String? error;
+  final List<Supplier> results;
+  final ValueChanged<Supplier> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: BoxConstraints(maxHeight: 260.h),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(12.r),
+        color: Colors.white,
+      ),
+      child: _buildContent(),
+    );
+  }
+
+  Widget _buildContent() {
+    if (loading) {
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: 16.h),
+        child: const Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+    if (error != null) {
+      return Padding(
+        padding: EdgeInsets.all(12.r),
+        child: Text(
+          error!,
+          style: const TextStyle(color: AppColors.danger),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+    if (results.isEmpty) {
+      return Padding(
+        padding: EdgeInsets.all(12.r),
+        child: const Text(
+          'لا يوجد موردون بهذا الاسم.',
+          style: TextStyle(color: AppColors.muted),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: EdgeInsets.zero,
+      shrinkWrap: true,
+      itemCount: results.length,
+      itemBuilder: (context, index) {
+        final supplier = results[index];
+        return InkWell(
+          onTap: () => onSelected(supplier),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+            child: Text(supplier.displayName),
+          ),
+        );
+      },
     );
   }
 }
@@ -743,7 +951,6 @@ class SupplierItemOffersSection extends StatefulWidget {
 }
 
 class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
-
   int? _lastSelectedSupplierId;
   int? _lastSelectedItemId;
   final _formKey = GlobalKey<FormState>();
@@ -986,47 +1193,49 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
                                     controller: controller,
                                     focusNode: focusNode,
                                     enabled: !state.addingSupplierItemOffer,
-                                    onFieldSubmitted: (_) =>
-                                        onFieldSubmitted(),
+                                    onFieldSubmitted: (_) => onFieldSubmitted(),
                                     decoration: const InputDecoration(
                                       labelText: 'المادة',
                                       hintText: 'اكتب رقم أو اسم المادة',
                                       suffixIcon: Icon(Icons.search),
                                     ),
                                   ),
-                              optionsViewBuilder: (context, onSelected, options) => Align(
-                                alignment: AlignmentDirectional.topStart,
-                                child: Material(
-                                  elevation: 4,
-                                  borderRadius: BorderRadius.circular(12.r),
-                                  child: ConstrainedBox(
-                                    constraints: BoxConstraints(
-                                      maxHeight: 360.h,
-                                      maxWidth: dropdownWidth,
-                                    ),
-                                    child: ListView.builder(
-                                      padding: EdgeInsets.zero,
-                                      shrinkWrap: true,
-                                      itemCount: options.length,
-                                      itemBuilder: (context, index) {
-                                        final item = options.elementAt(index);
-                                        return InkWell(
-                                          onTap: () => onSelected(item),
-                                          child: Padding(
-                                            padding: EdgeInsets.symmetric(
-                                              horizontal: 12.w,
-                                              vertical: 10.h,
-                                            ),
-                                            child: _dropdownMenuText(
-                                              _itemDropdownLabel(item),
-                                            ),
-                                          ),
-                                        );
-                                      },
+                              optionsViewBuilder:
+                                  (context, onSelected, options) => Align(
+                                    alignment: AlignmentDirectional.topStart,
+                                    child: Material(
+                                      elevation: 4,
+                                      borderRadius: BorderRadius.circular(12.r),
+                                      child: ConstrainedBox(
+                                        constraints: BoxConstraints(
+                                          maxHeight: 360.h,
+                                          maxWidth: dropdownWidth,
+                                        ),
+                                        child: ListView.builder(
+                                          padding: EdgeInsets.zero,
+                                          shrinkWrap: true,
+                                          itemCount: options.length,
+                                          itemBuilder: (context, index) {
+                                            final item = options.elementAt(
+                                              index,
+                                            );
+                                            return InkWell(
+                                              onTap: () => onSelected(item),
+                                              child: Padding(
+                                                padding: EdgeInsets.symmetric(
+                                                  horizontal: 12.w,
+                                                  vertical: 10.h,
+                                                ),
+                                                child: _dropdownMenuText(
+                                                  _itemDropdownLabel(item),
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ),
                             ),
                           ),
                           SizedBox(
@@ -1215,19 +1424,21 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
     final tender = state.tender;
     if (tender == null) return;
 
-    final fileName = 'supplier-offers-${tender.id}.pdf';
-    await _saveOrPrintPdf(
-      TenderPdfGenerator.supplierItemOffersPdf(
+    await _printOrFallbackToExcel(
+      context,
+      buildPdf: () => TenderPdfGenerator.supplierItemOffersPdf(
         tender,
         state.supplierItemOffers,
       ),
-      fileName,
+      buildExcel: () => TenderExcelGenerator.supplierItemOffersExcel(
+        tender,
+        state.supplierItemOffers,
+      ),
+      pdfFileName: 'supplier-offers-${tender.id}.pdf',
+      excelFileName: 'supplier-offers-${tender.id}.xlsx',
       download: download,
+      successMessage: download ? 'تم تجهيز كشف عروض الأسعار للتحميل' : null,
     );
-    if (!mounted) return;
-    if (download) {
-      showAppSnackBar(context, message: 'تم تجهيز كشف عروض الأسعار للتحميل');
-    }
   }
 
   Future<void> _exportSupplierOffersWithAnalysis(
@@ -1317,15 +1528,15 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
       );
     }
 
-    await _saveOrPrintPdf(
-      TenderPdfGenerator.supplierItemOffersPdf(tender, offers),
-      fileName,
-      download: download,
-    );
-    if (!mounted) return;
-    showAppSnackBar(
+    await _printOrFallbackToExcel(
       context,
-      message: download
+      buildPdf: () => TenderPdfGenerator.supplierItemOffersPdf(tender, offers),
+      buildExcel: () =>
+          TenderExcelGenerator.supplierItemOffersExcel(tender, offers),
+      pdfFileName: fileName,
+      excelFileName: fileName.replaceAll(RegExp(r'\.pdf$'), '.xlsx'),
+      download: download,
+      successMessage: download
           ? 'تم تجهيز الكشف بدون صفحة التحليل للتحميل'
           : 'تم تجهيز الكشف بدون صفحة التحليل',
     );
@@ -1386,8 +1597,7 @@ class _SupplierItemOffersSectionState extends State<SupplierItemOffersSection> {
     final trimmed = query.trim().toLowerCase();
     if (trimmed.isEmpty) return items;
     return items.where((item) {
-      final itemNo = (item.itemNo ?? item.id?.toString() ?? '')
-          .toLowerCase();
+      final itemNo = (item.itemNo ?? item.id?.toString() ?? '').toLowerCase();
       final description = (item.description ?? '').toLowerCase();
       return itemNo.contains(trimmed) || description.contains(trimmed);
     });
@@ -1683,16 +1893,51 @@ class _TenderItemAssignmentSectionState
                 OutlinedButton.icon(
                   onPressed: state.tender == null
                       ? null
-                      : () => TenderPdfGenerator.printPdf(
-                          TenderPdfGenerator.itemAssignmentsPdf(
+                      : () => _printOrFallbackToExcel(
+                          context,
+                          buildPdf: () => TenderPdfGenerator.itemAssignmentsPdf(
                             state.tender!,
                             state.tenderSuppliers,
                             state.itemAssignments,
                           ),
-                          'item-assignments-${state.tender!.id}.pdf',
+                          buildExcel: () =>
+                              TenderExcelGenerator.itemAssignmentsExcel(
+                                state.tender!,
+                                state.tenderSuppliers,
+                                state.itemAssignments,
+                              ),
+                          pdfFileName:
+                              'item-assignments-${state.tender!.id}.pdf',
+                          excelFileName:
+                              'item-assignments-${state.tender!.id}.xlsx',
                         ),
                   icon: const Icon(Icons.print_outlined),
                   label: const Text('طباعة PDF'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: state.tender == null
+                      ? null
+                      : () => _printOrFallbackToExcel(
+                          context,
+                          buildPdf: () =>
+                              TenderPdfGenerator.companiesAssignmentPdf(
+                                state.tender!,
+                                state.tenderSuppliers,
+                                state.itemAssignments,
+                              ),
+                          buildExcel: () =>
+                              TenderExcelGenerator.companiesAssignmentExcel(
+                                state.tender!,
+                                state.tenderSuppliers,
+                                state.itemAssignments,
+                              ),
+                          pdfFileName:
+                              'companies-assignment-${state.tender!.id}.pdf',
+                          excelFileName:
+                              'companies-assignment-${state.tender!.id}.xlsx',
+                        ),
+                  icon: const Icon(Icons.domain_outlined),
+                  label: const Text('عرض إحالة الشركات'),
                 ),
                 IconButton(
                   onPressed:
@@ -2844,20 +3089,23 @@ class _RadioGroup<T> extends StatelessWidget {
         children: [
           Text(title, style: Theme.of(context).textTheme.titleMedium),
           SizedBox(height: 6.h),
-          RadioGroup<T>(
-            groupValue: value,
-            onChanged: onChanged,
-            child: Column(
-              children: options
-                  .map(
-                    (option) => RadioListTile<T>(
-                      value: option,
-                      title: Text(option.toString()),
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  )
-                  .toList(),
+          Material(
+            type: MaterialType.transparency,
+            child: RadioGroup<T>(
+              groupValue: value,
+              onChanged: onChanged,
+              child: Column(
+                children: options
+                    .map(
+                      (option) => RadioListTile<T>(
+                        value: option,
+                        title: Text(option.toString()),
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    )
+                    .toList(),
+              ),
             ),
           ),
         ],
@@ -3027,9 +3275,12 @@ class PdfSection extends StatelessWidget {
             runSpacing: 12.h,
             children: [
               ElevatedButton.icon(
-                onPressed: () => TenderPdfGenerator.printPdf(
-                  TenderPdfGenerator.itemsPdf(tender),
-                  'items-${tender.id}.pdf',
+                onPressed: () => _printOrFallbackToExcel(
+                  context,
+                  buildPdf: () => TenderPdfGenerator.itemsPdf(tender),
+                  buildExcel: () => TenderExcelGenerator.itemsExcel(tender),
+                  pdfFileName: 'items-${tender.id}.pdf',
+                  excelFileName: 'items-${tender.id}.xlsx',
                 ),
                 icon: const Icon(Icons.print_outlined),
                 label: const Text('طباعة المواد PDF'),

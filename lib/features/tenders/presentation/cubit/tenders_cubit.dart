@@ -130,10 +130,12 @@ class TenderDetailsState extends Equatable {
     this.uploadProgress,
     this.assignmentFilter = AssignmentFilter.all,
     this.loadingAssignments = const {},
-    this.suppliers = const [],
     this.tenderSuppliers = const [],
     this.suppliersLoading = false,
     this.addingSupplier = false,
+    this.supplierSearchResults = const [],
+    this.supplierSearchLoading = false,
+    this.supplierSearchError,
     this.supplierItemOffers = const [],
     this.supplierItemOffersLoading = false,
     this.addingSupplierItemOffer = false,
@@ -150,10 +152,12 @@ class TenderDetailsState extends Equatable {
   final double? uploadProgress;
   final AssignmentFilter assignmentFilter;
   final Set<String> loadingAssignments;
-  final List<Supplier> suppliers;
   final List<Supplier> tenderSuppliers;
   final bool suppliersLoading;
   final bool addingSupplier;
+  final List<Supplier> supplierSearchResults;
+  final bool supplierSearchLoading;
+  final String? supplierSearchError;
   final List<SupplierItemOffer> supplierItemOffers;
   final bool supplierItemOffersLoading;
   final bool addingSupplierItemOffer;
@@ -192,10 +196,12 @@ class TenderDetailsState extends Equatable {
     bool clearUploadProgress = false,
     AssignmentFilter? assignmentFilter,
     Set<String>? loadingAssignments,
-    List<Supplier>? suppliers,
     List<Supplier>? tenderSuppliers,
     bool? suppliersLoading,
     bool? addingSupplier,
+    List<Supplier>? supplierSearchResults,
+    bool? supplierSearchLoading,
+    String? supplierSearchError,
     List<SupplierItemOffer>? supplierItemOffers,
     bool? supplierItemOffersLoading,
     bool? addingSupplierItemOffer,
@@ -214,10 +220,14 @@ class TenderDetailsState extends Equatable {
           : uploadProgress ?? this.uploadProgress,
       assignmentFilter: assignmentFilter ?? this.assignmentFilter,
       loadingAssignments: loadingAssignments ?? this.loadingAssignments,
-      suppliers: suppliers ?? this.suppliers,
       tenderSuppliers: tenderSuppliers ?? this.tenderSuppliers,
       suppliersLoading: suppliersLoading ?? this.suppliersLoading,
       addingSupplier: addingSupplier ?? this.addingSupplier,
+      supplierSearchResults:
+          supplierSearchResults ?? this.supplierSearchResults,
+      supplierSearchLoading:
+          supplierSearchLoading ?? this.supplierSearchLoading,
+      supplierSearchError: supplierSearchError,
       supplierItemOffers: supplierItemOffers ?? this.supplierItemOffers,
       supplierItemOffersLoading:
           supplierItemOffersLoading ?? this.supplierItemOffersLoading,
@@ -242,10 +252,12 @@ class TenderDetailsState extends Equatable {
     uploadProgress,
     assignmentFilter,
     loadingAssignments,
-    suppliers,
     tenderSuppliers,
     suppliersLoading,
     addingSupplier,
+    supplierSearchResults,
+    supplierSearchLoading,
+    supplierSearchError,
     supplierItemOffers,
     supplierItemOffersLoading,
     addingSupplierItemOffer,
@@ -453,14 +465,12 @@ class TenderDetailsCubit extends Cubit<TenderDetailsState> {
   Future<void> loadSuppliersData(int tenderId) async {
     emit(state.copyWith(suppliersLoading: true));
     try {
-      final results = await Future.wait([
-        _repository.getSuppliers(),
-        _repository.getSuppliersByTenderId(tenderId),
-      ]);
+      final tenderSuppliers = await _repository.getSuppliersByTenderId(
+        tenderId,
+      );
       emit(
         state.copyWith(
-          suppliers: results[0],
-          tenderSuppliers: results[1],
+          tenderSuppliers: tenderSuppliers,
           suppliersLoading: false,
         ),
       );
@@ -469,6 +479,44 @@ class TenderDetailsCubit extends Cubit<TenderDetailsState> {
         state.copyWith(suppliersLoading: false, errorMessage: error.message),
       );
     }
+  }
+
+  Future<void> searchSuppliers(String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      clearSupplierSearch();
+      return;
+    }
+    emit(
+      state.copyWith(supplierSearchLoading: true, supplierSearchError: null),
+    );
+    try {
+      final results = await _repository.searchSuppliers(trimmed);
+      emit(
+        state.copyWith(
+          supplierSearchResults: results,
+          supplierSearchLoading: false,
+        ),
+      );
+    } on AppException catch (error) {
+      emit(
+        state.copyWith(
+          supplierSearchResults: const [],
+          supplierSearchLoading: false,
+          supplierSearchError: error.message,
+        ),
+      );
+    }
+  }
+
+  void clearSupplierSearch() {
+    emit(
+      state.copyWith(
+        supplierSearchResults: const [],
+        supplierSearchLoading: false,
+        supplierSearchError: null,
+      ),
+    );
   }
 
   Future<bool> addSupplierToTender(int supplierId) async {
@@ -484,7 +532,11 @@ class TenderDetailsCubit extends Cubit<TenderDetailsState> {
         tender.id,
       );
       emit(
-        state.copyWith(tenderSuppliers: tenderSuppliers, addingSupplier: false),
+        state.copyWith(
+          tenderSuppliers: tenderSuppliers,
+          addingSupplier: false,
+          supplierSearchResults: const [],
+        ),
       );
       return true;
     } on AppException catch (error) {
