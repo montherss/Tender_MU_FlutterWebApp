@@ -29,6 +29,63 @@ class TenderSummary extends Equatable {
   ];
 }
 
+final _itemNoTokenPattern = RegExp(r'\d+|\D+');
+
+/// Natural ascending comparison of item numbers so that "2" < "10" and
+/// "1.2" < "1.10". Missing item numbers are always placed last.
+int compareItemNo(String? a, String? b) {
+  final left = a?.trim() ?? '';
+  final right = b?.trim() ?? '';
+  if (left.isEmpty || right.isEmpty) {
+    if (left.isEmpty && right.isEmpty) return 0;
+    return left.isEmpty ? 1 : -1;
+  }
+  final leftTokens = _itemNoTokenPattern
+      .allMatches(left)
+      .map((m) => m[0]!)
+      .toList();
+  final rightTokens = _itemNoTokenPattern
+      .allMatches(right)
+      .map((m) => m[0]!)
+      .toList();
+  for (var i = 0; i < leftTokens.length && i < rightTokens.length; i++) {
+    final l = leftTokens[i];
+    final r = rightTokens[i];
+    final lNum = int.tryParse(l);
+    final rNum = int.tryParse(r);
+    final result = lNum != null && rNum != null
+        ? lNum.compareTo(rNum)
+        : l.toLowerCase().compareTo(r.toLowerCase());
+    if (result != 0) return result;
+  }
+  return leftTokens.length.compareTo(rightTokens.length);
+}
+
+List<TenderItem> sortTenderItemsByNo(List<TenderItem> items) {
+  return [...items]..sort((a, b) {
+    final result = compareItemNo(a.itemNo, b.itemNo);
+    return result != 0 ? result : (a.id ?? 0).compareTo(b.id ?? 0);
+  });
+}
+
+/// Orders assignments ascending by the item number of their tender item.
+List<ItemAssignment> sortAssignmentsByItemNo(
+  List<TenderItem> items,
+  List<ItemAssignment> assignments,
+) {
+  final itemNoById = {
+    for (final item in items)
+      if (item.id != null) item.id!: item.itemNo,
+  };
+  return [...assignments]..sort((a, b) {
+    final result = compareItemNo(
+      itemNoById[a.tenderItemId] ?? '${a.tenderItemId}',
+      itemNoById[b.tenderItemId] ?? '${b.tenderItemId}',
+    );
+    return result != 0 ? result : a.tenderItemId.compareTo(b.tenderItemId);
+  });
+}
+
 class TenderDetails extends TenderSummary {
   const TenderDetails({
     required super.id,
@@ -100,6 +157,10 @@ class TenderDetails extends TenderSummary {
       attachments: attachments ?? this.attachments,
     );
   }
+
+  /// Copy whose [items] are ordered ascending by item number.
+  TenderDetails withSortedItems() =>
+      copyWith(items: sortTenderItemsByNo(items));
 
   @override
   List<Object?> get props => [

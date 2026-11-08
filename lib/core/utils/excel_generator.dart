@@ -93,12 +93,9 @@ class TenderExcelGenerator {
         offersByItem.entries
             .where((entry) => !validItemIds.contains(entry.key))
             .toList()
-          ..sort((a, b) {
-            final aNo = num.tryParse(a.value.first.itemNo?.trim() ?? '');
-            final bNo = num.tryParse(b.value.first.itemNo?.trim() ?? '');
-            if (aNo != null && bNo != null) return aNo.compareTo(bNo);
-            return 0;
-          });
+          ..sort(
+            (a, b) => compareItemNo(a.value.first.itemNo, b.value.first.itemNo),
+          );
     final pageTotal = validItems.length + orphanEntries.length;
 
     var itemIndex = 0;
@@ -281,6 +278,8 @@ class TenderExcelGenerator {
     List<Supplier> suppliers,
     List<ItemAssignment> assignments,
   ) async {
+    tender = tender.withSortedItems();
+    assignments = sortAssignmentsByItemNo(tender.items, assignments);
     final workbook = Workbook();
     final sheet = workbook.worksheets[0];
     final styles = _ExcelStyles(workbook);
@@ -409,6 +408,8 @@ class TenderExcelGenerator {
     List<Supplier> suppliers,
     List<ItemAssignment> assignments,
   ) async {
+    tender = tender.withSortedItems();
+    assignments = sortAssignmentsByItemNo(tender.items, assignments);
     final workbook = Workbook();
     final sheet = workbook.worksheets[0];
     final styles = _ExcelStyles(workbook);
@@ -656,18 +657,8 @@ class TenderExcelGenerator {
 
   /// Sorts a copy of [items] numerically by item number, since the source
   /// list order doesn't reliably match ascending item numbers.
-  static List<TenderItem> _sortedTenderItems(List<TenderItem> items) {
-    final sorted = [...items];
-    sorted.sort((a, b) {
-      final aNo = num.tryParse(a.itemNo?.trim() ?? '');
-      final bNo = num.tryParse(b.itemNo?.trim() ?? '');
-      if (aNo != null && bNo != null) return aNo.compareTo(bNo);
-      if (aNo != null) return -1;
-      if (bNo != null) return 1;
-      return (a.itemNo ?? '').compareTo(b.itemNo ?? '');
-    });
-    return sorted;
-  }
+  static List<TenderItem> _sortedTenderItems(List<TenderItem> items) =>
+      sortTenderItemsByNo(items);
 
   /// Builds a valid, unique Excel worksheet name (max 31 chars, no
   /// `: \ / ? * [ ]`) for a material's sheet.

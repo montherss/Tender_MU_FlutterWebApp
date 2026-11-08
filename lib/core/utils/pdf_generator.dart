@@ -11,6 +11,7 @@ class TenderPdfGenerator {
   const TenderPdfGenerator._();
 
   static Future<Uint8List> itemsPdf(TenderDetails tender) async {
+    tender = tender.withSortedItems();
     final theme = await _arabicPdfTheme();
     final logo = await _pdfLogo();
     final doc = pw.Document();
@@ -180,6 +181,8 @@ class TenderPdfGenerator {
     final theme = await _arabicPdfTheme();
     final logo = await _pdfLogo();
     final doc = pw.Document();
+    tender = tender.withSortedItems();
+    assignments = sortAssignmentsByItemNo(tender.items, assignments);
     final supplierNames = _assignmentSupplierNames(suppliers, assignments);
 
     doc.addPage(
@@ -241,6 +244,8 @@ class TenderPdfGenerator {
     final theme = await _arabicPdfTheme();
     final logo = await _pdfLogo();
     final doc = pw.Document();
+    tender = tender.withSortedItems();
+    assignments = sortAssignmentsByItemNo(tender.items, assignments);
     final supplierNames = _assignmentSupplierNames(suppliers, assignments)
         .where(
           (name) =>
@@ -841,7 +846,11 @@ class TenderPdfGenerator {
       sections.add(pw.SizedBox(height: 14));
     }
 
-    for (final entry in offersByItem.entries) {
+    final remainingEntries = offersByItem.entries.toList()
+      ..sort(
+        (a, b) => compareItemNo(a.value.first.itemNo, b.value.first.itemNo),
+      );
+    for (final entry in remainingEntries) {
       if (processedItemIds.contains(entry.key)) continue;
       final sample = entry.value.first;
       sectionIndex++;
@@ -875,18 +884,11 @@ class TenderPdfGenerator {
     return sections;
   }
 
-  static List<TenderItem> _sortedTenderItems(List<TenderItem> items) {
-    final sorted = [...items];
-    sorted.sort((a, b) {
-      final aNo = num.tryParse(a.itemNo?.trim() ?? '');
-      final bNo = num.tryParse(b.itemNo?.trim() ?? '');
-      if (aNo != null && bNo != null) return aNo.compareTo(bNo);
-      if (aNo != null) return -1;
-      if (bNo != null) return 1;
-      return (a.itemNo ?? '').compareTo(b.itemNo ?? '');
-    });
-    return sorted;
-  }
+  static List<TenderItem> _sortedTenderItems(List<TenderItem> items) =>
+      sortTenderItemsByNo(items);
+
+  static List<AnalysisAward> _sortedAwards(List<AnalysisAward> awards) =>
+      [...awards]..sort((a, b) => compareItemNo(a.itemNo, b.itemNo));
 
   static String _offersSummaryText(
     TenderDetails tender,
@@ -904,6 +906,7 @@ class TenderPdfGenerator {
   }
 
   static List<pw.Widget> _aiAnalysisReport(TenderAnalysis analysis) {
+    final awards = _sortedAwards(analysis.awards);
     return [
       _aiAnalysisHero(analysis),
       pw.SizedBox(height: 12),
@@ -911,9 +914,9 @@ class TenderPdfGenerator {
       pw.SizedBox(height: 12),
       _aiConceptsGuide(),
       pw.SizedBox(height: 12),
-      _aiAwardsTable(analysis.awards),
+      _aiAwardsTable(awards),
       pw.SizedBox(height: 12),
-      ...analysis.awards.map(_aiAwardReasonCard),
+      ...awards.map(_aiAwardReasonCard),
     ];
   }
 
@@ -923,7 +926,7 @@ class TenderPdfGenerator {
       pw.SizedBox(height: 12),
       _aiAnalysisMetrics(analysis),
       pw.SizedBox(height: 12),
-      _compactAiAwardsSummary(analysis.awards),
+      _compactAiAwardsSummary(_sortedAwards(analysis.awards)),
       pw.SizedBox(height: 8),
       pw.Text(
         'ملاحظة: تم توليد نسخة مختصرة من التحليل لضمان إنشاء ملف PDF بنجاح.',

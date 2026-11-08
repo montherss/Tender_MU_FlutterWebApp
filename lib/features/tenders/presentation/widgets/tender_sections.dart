@@ -1853,6 +1853,9 @@ class _TenderItemAssignmentSectionState
     extends State<TenderItemAssignmentSection> {
   bool _dataRequested = false;
   int? _editingTenderItemId;
+  _AwardView _view = _AwardView.byItem;
+  _AwardFilter _filter = _AwardFilter.all;
+  String _query = '';
 
   @override
   void initState() {
@@ -1873,10 +1876,17 @@ class _TenderItemAssignmentSectionState
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
-    final assignedItemIds = _assignedItemIds(state.itemAssignments);
-    final editingTenderItemId = assignedItemIds.contains(_editingTenderItemId)
+    final board = _AwardBoard.from(
+      items: state.tender?.items ?? const [],
+      offers: state.supplierItemOffers,
+      assignments: state.itemAssignments,
+    );
+    final editingTenderItemId =
+        board.assignedItemIds.contains(_editingTenderItemId)
         ? _editingTenderItemId
         : null;
+    final loading =
+        state.supplierItemOffersLoading || state.itemAssignmentsLoading;
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1884,9 +1894,13 @@ class _TenderItemAssignmentSectionState
           SectionHeader(
             title: 'إحالة عطاء',
             subtitle:
-                'اختر عرض السعر ثم نفذ إحالة فنية أو رئيسية مع السعر والملاحظة.',
+                'استعرض عروض الشركات لكل مادة مرتبة تصاعدياً، ثم نفذ إحالة فنية أو رئيسية مباشرة.',
             icon: Icons.assignment_turned_in_outlined,
-            trailing: Wrap(
+          ),
+          SizedBox(height: 12.h),
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: Wrap(
               spacing: 8.w,
               runSpacing: 8.h,
               children: [
@@ -1940,11 +1954,7 @@ class _TenderItemAssignmentSectionState
                   label: const Text('عرض إحالة الشركات'),
                 ),
                 IconButton(
-                  onPressed:
-                      state.supplierItemOffersLoading ||
-                          state.itemAssignmentsLoading
-                      ? null
-                      : _refreshData,
+                  onPressed: loading ? null : _refreshData,
                   icon: const Icon(Icons.refresh),
                   tooltip: 'تحديث الإحالات والعروض',
                 ),
@@ -1952,78 +1962,106 @@ class _TenderItemAssignmentSectionState
             ),
           ),
           SizedBox(height: 16.h),
-          Text(
-            'عروض الأسعار المتاحة (${state.supplierItemOffers.length})',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          SizedBox(height: 10.h),
-          if (editingTenderItemId != null) ...[
-            Container(
-              width: double.infinity,
-              padding: EdgeInsets.all(12.r),
-              decoration: BoxDecoration(
-                color: AppColors.teal.withValues(alpha: .08),
-                border: Border.all(color: AppColors.teal.withValues(alpha: .3)),
-                borderRadius: BorderRadius.circular(16.r),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.edit_note_outlined, color: AppColors.teal),
-                  SizedBox(width: 8.w),
-                  Expanded(
-                    child: Text(
-                      'وضع تعديل الإحالة مفعل للمادة رقم $editingTenderItemId. اختر عرضاً آخر لنفس المادة لإعادة الإحالة.',
-                      style: const TextStyle(color: AppColors.teal),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () =>
-                        setState(() => _editingTenderItemId = null),
-                    child: const Text('إلغاء التعديل'),
-                  ),
-                ],
-              ),
-            ),
-            SizedBox(height: 10.h),
+          if (loading) ...[
+            const LinearProgressIndicator(),
+            SizedBox(height: 12.h),
           ],
-          if (state.supplierItemOffersLoading)
-            const LinearProgressIndicator()
-          else if (state.supplierItemOffers.isEmpty)
-            const Text(
-              'لا توجد عروض أسعار لإحالتها بعد.',
-              style: TextStyle(color: AppColors.muted),
-            )
-          else
-            _AssignmentOffersTable(
-              offers: state.supplierItemOffers,
-              assignedItemIds: assignedItemIds,
-              editingTenderItemId: editingTenderItemId,
-              loadingOfferIds: state.loadingItemAssignments,
-              onAssign: _openAssignmentDialog,
-              onEditItem: (itemId) =>
-                  setState(() => _editingTenderItemId = itemId),
-            ),
-          SizedBox(height: 22.h),
-          Text(
-            'المواد المحالة (${assignedItemIds.length})',
-            style: Theme.of(context).textTheme.titleMedium,
+          _AwardStatsBar(board: board),
+          SizedBox(height: 16.h),
+          _AwardToolbar(
+            view: _view,
+            filter: _filter,
+            board: board,
+            onViewChanged: (view) => setState(() => _view = view),
+            onFilterChanged: (filter) => setState(() => _filter = filter),
+            onQueryChanged: (query) =>
+                setState(() => _query = query.trim().toLowerCase()),
           ),
-          SizedBox(height: 10.h),
-          if (state.itemAssignmentsLoading)
-            const LinearProgressIndicator()
-          else if (state.itemAssignments.isEmpty)
+          SizedBox(height: 16.h),
+          if (!loading && board.items.isEmpty)
             const Text(
-              'لا توجد مواد محالة لهذا العطاء بعد.',
+              'لا توجد مواد أو عروض أسعار لإحالتها بعد.',
               style: TextStyle(color: AppColors.muted),
             )
+          else if (_view == _AwardView.byItem)
+            ..._buildItemCards(board, editingTenderItemId)
           else
-            _ItemAssignmentsTable(
-              assignments: state.itemAssignments,
-              onEdit: _startAssignmentEdit,
-            ),
+            ..._buildSupplierCards(board, editingTenderItemId),
         ],
       ),
     );
+  }
+
+  List<Widget> _buildItemCards(_AwardBoard board, int? editingTenderItemId) {
+    final items = board.items.where((item) {
+      final statusMatches = switch (_filter) {
+        _AwardFilter.all => true,
+        _AwardFilter.pending => !item.isAssigned,
+        _AwardFilter.assigned => item.isAssigned,
+      };
+      return statusMatches && item.matches(_query);
+    }).toList();
+    if (items.isEmpty) return [const _AwardEmptyResult()];
+    return items
+        .map(
+          (item) => Padding(
+            padding: EdgeInsets.only(bottom: 12.h),
+            child: _AwardItemCard(
+              key: ValueKey('award-item-${item.itemId}'),
+              item: item,
+              board: board,
+              editing: editingTenderItemId == item.itemId,
+              loadingOfferIds: widget.state.loadingItemAssignments,
+              onAssign: _openAssignmentDialog,
+              onStartEdit: () =>
+                  setState(() => _editingTenderItemId = item.itemId),
+              onCancelEdit: () => setState(() => _editingTenderItemId = null),
+            ),
+          ),
+        )
+        .toList();
+  }
+
+  List<Widget> _buildSupplierCards(
+    _AwardBoard board,
+    int? editingTenderItemId,
+  ) {
+    final cards = <Widget>[];
+    for (final supplier in board.suppliers) {
+      final supplierMatches = supplier.name.toLowerCase().contains(_query);
+      final offers = supplier.offers.where((offer) {
+        final item = board.itemById[offer.itemId];
+        final statusMatches = switch (_filter) {
+          _AwardFilter.all => true,
+          _AwardFilter.pending => !(item?.isAssigned ?? false),
+          _AwardFilter.assigned => board.assignmentByOfferId.containsKey(
+            offer.id,
+          ),
+        };
+        final queryMatches =
+            supplierMatches || (item?.matches(_query) ?? false);
+        return statusMatches && queryMatches;
+      }).toList();
+      if (offers.isEmpty) continue;
+      cards.add(
+        Padding(
+          padding: EdgeInsets.only(bottom: 12.h),
+          child: _AwardSupplierCard(
+            key: ValueKey('award-supplier-${supplier.id}'),
+            supplier: supplier,
+            visibleOffers: offers,
+            board: board,
+            editingTenderItemId: editingTenderItemId,
+            loadingOfferIds: widget.state.loadingItemAssignments,
+            onAssign: _openAssignmentDialog,
+            onStartEdit: (itemId) =>
+                setState(() => _editingTenderItemId = itemId),
+          ),
+        ),
+      );
+    }
+    if (cards.isEmpty) return [const _AwardEmptyResult()];
+    return cards;
   }
 
   void _loadData() {
@@ -2049,7 +2087,7 @@ class _TenderItemAssignmentSectionState
     if (itemAssigned && _editingTenderItemId != offer.itemId) {
       showAppSnackBar(
         context,
-        message: 'هذه المادة محالة مسبقاً، اضغط تعديل قبل إعادة الإحالة',
+        message: 'هذه المادة محالة مسبقاً، اضغط تغيير الإحالة أولاً',
       );
       return;
     }
@@ -2070,14 +2108,6 @@ class _TenderItemAssignmentSectionState
     showAppSnackBar(context, message: 'تمت إحالة العرض بنجاح');
   }
 
-  void _startAssignmentEdit(ItemAssignment assignment) {
-    setState(() => _editingTenderItemId = assignment.tenderItemId);
-    showAppSnackBar(
-      context,
-      message: 'اختر عرضاً آخر لنفس المادة من جدول عروض الأسعار',
-    );
-  }
-
   Set<int> _assignedItemIds(List<ItemAssignment> assignments) {
     return assignments
         .map((assignment) => assignment.tenderItemId)
@@ -2086,216 +2116,564 @@ class _TenderItemAssignmentSectionState
   }
 }
 
-class _AssignmentOffersTable extends StatelessWidget {
-  const _AssignmentOffersTable({
-    required this.offers,
-    required this.assignedItemIds,
-    required this.editingTenderItemId,
-    required this.loadingOfferIds,
-    required this.onAssign,
-    required this.onEditItem,
-  });
+enum _AwardView { byItem, bySupplier }
 
-  final List<SupplierItemOffer> offers;
-  final Set<int> assignedItemIds;
-  final int? editingTenderItemId;
-  final Set<int> loadingOfferIds;
-  final void Function(SupplierItemOffer offer, String assignmentType) onAssign;
-  final ValueChanged<int> onEditItem;
+enum _AwardFilter { all, pending, assigned }
 
-  @override
-  Widget build(BuildContext context) {
-    final primaryItems = _primaryItems();
-    final suppliers = _suppliers();
-    if (primaryItems.isEmpty) {
-      return const Text(
-        'لا توجد مواد أساسية لعرضها في جدول الإحالة.',
-        style: TextStyle(color: AppColors.muted),
+String _awardAmount(num? value) {
+  if (value == null) return '-';
+  final text = value.toStringAsFixed(3);
+  return text.contains('.')
+      ? text.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '')
+      : text;
+}
+
+/// Item-centric view of the offers and assignments of one tender, with
+/// items ordered ascending by item number and offers by price.
+class _AwardBoard {
+  _AwardBoard._({
+    required this.items,
+    required this.suppliers,
+    required this.assignmentByOfferId,
+    required this.lowestOfferIdByItem,
+  }) : itemById = {for (final item in items) item.itemId: item};
+
+  factory _AwardBoard.from({
+    required List<TenderItem> items,
+    required List<SupplierItemOffer> offers,
+    required List<ItemAssignment> assignments,
+  }) {
+    final offersByItem = <int, List<SupplierItemOffer>>{};
+    for (final offer in offers) {
+      offersByItem.putIfAbsent(offer.itemId, () => []).add(offer);
+    }
+    final assignmentsByItem = <int, List<ItemAssignment>>{};
+    for (final assignment in assignments) {
+      if (assignment.tenderItemId <= 0) continue;
+      assignmentsByItem
+          .putIfAbsent(assignment.tenderItemId, () => [])
+          .add(assignment);
+    }
+
+    final awardItems = <int, _AwardItem>{};
+    for (final item in items) {
+      final id = item.id;
+      if (id == null) continue;
+      awardItems[id] = _AwardItem(
+        itemId: id,
+        itemNo: item.itemNo,
+        description: item.description,
+        quantity: item.quantity,
+        unit: item.unit,
+        offers: offersByItem[id] ?? const [],
+        assignments: assignmentsByItem[id] ?? const [],
       );
     }
-    return _HorizontalTableScroll(
-      minWidth: 220 + (primaryItems.length * 340),
-      child: DataTable(
-        dataRowMinHeight: 112,
-        dataRowMaxHeight: 360,
-        columns: [
-          const DataColumn(label: Text('الشركات')),
-          ...primaryItems.map(
-            (item) => DataColumn(
-              label: SizedBox(
-                width: 300,
-                child: Text(
-                  '${item.itemNo ?? item.itemId} - ${item.description ?? 'مادة'}',
-                ),
-              ),
+    for (final entry in offersByItem.entries) {
+      if (awardItems.containsKey(entry.key)) continue;
+      final sample = entry.value.firstWhere(
+        (offer) => !offer.hasAlternative,
+        orElse: () => entry.value.first,
+      );
+      awardItems[entry.key] = _AwardItem(
+        itemId: entry.key,
+        itemNo: sample.itemNo,
+        description: sample.description,
+        quantity: sample.quantity,
+        unit: sample.unit,
+        offers: entry.value,
+        assignments: assignmentsByItem[entry.key] ?? const [],
+      );
+    }
+
+    final sortedItems = awardItems.values.toList()
+      ..sort((a, b) {
+        final result = compareItemNo(a.itemNo, b.itemNo);
+        return result != 0 ? result : a.itemId.compareTo(b.itemId);
+      });
+    for (final item in sortedItems) {
+      item.offers.sort(_compareOffersByPrice);
+    }
+    final itemOrder = {
+      for (final entry in sortedItems.asMap().entries)
+        entry.value.itemId: entry.key,
+    };
+
+    final suppliersById = <int, _AwardSupplier>{};
+    for (final offer in offers) {
+      suppliersById
+          .putIfAbsent(
+            offer.supplierId,
+            () => _AwardSupplier(
+              id: offer.supplierId,
+              name: offer.supplierName ?? 'شركة ${offer.supplierId}',
             ),
-          ),
-        ],
-        rows: suppliers.map((supplier) {
-          return DataRow(
-            cells: [
-              DataCell(
-                SizedBox(
-                  width: 180,
-                  child: Text(
-                    supplier.name,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ),
-              ...primaryItems.map((item) {
-                final cellOffers = _offersFor(
-                  supplierId: supplier.id,
-                  itemId: item.itemId,
-                );
-                final itemAssigned = assignedItemIds.contains(item.itemId);
-                final canEditAssignedItem = editingTenderItemId == item.itemId;
-                return DataCell(
-                  _AssignmentMatrixCell(
-                    offers: cellOffers,
-                    itemAssigned: itemAssigned,
-                    canEditAssignedItem: canEditAssignedItem,
-                    loadingOfferIds: loadingOfferIds,
-                    onAssign: onAssign,
-                    onEditItem: () => onEditItem(item.itemId),
-                  ),
-                );
-              }),
-            ],
-          );
-        }).toList(),
-      ),
+          )
+          .offers
+          .add(offer);
+    }
+    final assignmentByOfferId = {
+      for (final assignment in assignments)
+        assignment.supplierItemOfferId: assignment,
+    };
+    final suppliers = suppliersById.values.toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+    for (final supplier in suppliers) {
+      supplier.offers.sort((a, b) {
+        final result = (itemOrder[a.itemId] ?? 0).compareTo(
+          itemOrder[b.itemId] ?? 0,
+        );
+        if (result != 0) return result;
+        if (a.hasAlternative != b.hasAlternative) {
+          return a.hasAlternative ? 1 : -1;
+        }
+        return a.id.compareTo(b.id);
+      });
+    }
+
+    final lowestOfferIdByItem = <int, int>{};
+    for (final item in sortedItems) {
+      final lowest = item.offers.where((offer) => offer.price != null);
+      if (item.offers.length > 1 && lowest.isNotEmpty) {
+        lowestOfferIdByItem[item.itemId] = lowest.first.id;
+      }
+    }
+
+    return _AwardBoard._(
+      items: sortedItems,
+      suppliers: suppliers,
+      assignmentByOfferId: assignmentByOfferId,
+      lowestOfferIdByItem: lowestOfferIdByItem,
     );
   }
 
-  List<SupplierItemOffer> _primaryItems() {
-    final byItemId = <int, SupplierItemOffer>{};
-    for (final offer in offers) {
-      if (!offer.hasAlternative) {
-        byItemId.putIfAbsent(offer.itemId, () => offer);
-      }
-    }
-    return byItemId.values.toList();
-  }
+  final List<_AwardItem> items;
+  final List<_AwardSupplier> suppliers;
+  final Map<int, ItemAssignment> assignmentByOfferId;
+  final Map<int, int> lowestOfferIdByItem;
+  final Map<int, _AwardItem> itemById;
 
-  List<_AssignmentSupplierRow> _suppliers() {
-    final bySupplierId = <int, _AssignmentSupplierRow>{};
-    for (final offer in offers) {
-      bySupplierId.putIfAbsent(
-        offer.supplierId,
-        () => _AssignmentSupplierRow(
-          id: offer.supplierId,
-          name: offer.supplierName ?? 'شركة ${offer.supplierId}',
+  Set<int> get assignedItemIds =>
+      items.where((item) => item.isAssigned).map((item) => item.itemId).toSet();
+
+  int get assignedCount => items.where((item) => item.isAssigned).length;
+
+  num get assignedTotal => items.fold<num>(
+    0,
+    (sum, item) =>
+        sum +
+        item.assignments.fold<num>(
+          0,
+          (s, a) => s + (a.assignedPrice ?? a.price ?? 0),
         ),
-      );
-    }
-    return bySupplierId.values.toList();
-  }
+  );
 
-  List<SupplierItemOffer> _offersFor({
-    required int supplierId,
-    required int itemId,
-  }) {
-    final matching = offers
-        .where(
-          (offer) => offer.supplierId == supplierId && offer.itemId == itemId,
-        )
-        .toList();
-    matching.sort((a, b) {
-      if (a.hasAlternative == b.hasAlternative) return a.id.compareTo(b.id);
-      return a.hasAlternative ? 1 : -1;
-    });
-    return matching;
+  bool isLowest(SupplierItemOffer offer) =>
+      lowestOfferIdByItem[offer.itemId] == offer.id;
+
+  static int _compareOffersByPrice(SupplierItemOffer a, SupplierItemOffer b) {
+    final aPrice = a.price;
+    final bPrice = b.price;
+    if (aPrice != null && bPrice != null && aPrice != bPrice) {
+      return aPrice.compareTo(bPrice);
+    }
+    if ((aPrice == null) != (bPrice == null)) return aPrice == null ? 1 : -1;
+    if (a.hasAlternative != b.hasAlternative) return a.hasAlternative ? 1 : -1;
+    return a.id.compareTo(b.id);
   }
 }
 
-class _AssignmentSupplierRow {
-  const _AssignmentSupplierRow({required this.id, required this.name});
+class _AwardItem {
+  _AwardItem({
+    required this.itemId,
+    required this.itemNo,
+    required this.description,
+    required this.quantity,
+    required this.unit,
+    required List<SupplierItemOffer> offers,
+    required this.assignments,
+  }) : offers = [...offers];
+
+  final int itemId;
+  final String? itemNo;
+  final String? description;
+  final num? quantity;
+  final String? unit;
+  final List<SupplierItemOffer> offers;
+  final List<ItemAssignment> assignments;
+
+  bool get isAssigned => assignments.isNotEmpty;
+
+  String get label {
+    final no = itemNo?.trim();
+    return no == null || no.isEmpty ? '$itemId' : no;
+  }
+
+  String get title {
+    final text = description?.trim();
+    return text == null || text.isEmpty ? 'مادة $label' : text;
+  }
+
+  int get supplierCount =>
+      offers.map((offer) => offer.supplierId).toSet().length;
+
+  bool matches(String query) {
+    if (query.isEmpty) return true;
+    return label.toLowerCase().contains(query) ||
+        title.toLowerCase().contains(query) ||
+        offers.any(
+          (offer) => (offer.supplierName ?? '').toLowerCase().contains(query),
+        );
+  }
+}
+
+class _AwardSupplier {
+  _AwardSupplier({required this.id, required this.name});
 
   final int id;
   final String name;
+  final List<SupplierItemOffer> offers = [];
 }
 
-class _AssignmentMatrixCell extends StatelessWidget {
-  const _AssignmentMatrixCell({
-    required this.offers,
-    required this.itemAssigned,
-    required this.canEditAssignedItem,
-    required this.loadingOfferIds,
-    required this.onAssign,
-    required this.onEditItem,
-  });
+class _AwardStatsBar extends StatelessWidget {
+  const _AwardStatsBar({required this.board});
 
-  final List<SupplierItemOffer> offers;
-  final bool itemAssigned;
-  final bool canEditAssignedItem;
-  final Set<int> loadingOfferIds;
-  final void Function(SupplierItemOffer offer, String assignmentType) onAssign;
-  final VoidCallback onEditItem;
+  final _AwardBoard board;
 
   @override
   Widget build(BuildContext context) {
-    final disabled = itemAssigned && !canEditAssignedItem;
-    final backgroundColor = itemAssigned
-        ? canEditAssignedItem
-              ? AppColors.teal.withValues(alpha: .08)
-              : AppColors.border.withValues(alpha: .35)
-        : AppColors.surface;
+    final total = board.items.length;
+    final assigned = board.assignedCount;
+    final progress = total == 0 ? 0.0 : assigned / total;
     return Container(
-      width: 320,
-      padding: EdgeInsets.all(10.r),
+      padding: EdgeInsets.all(14.r),
       decoration: BoxDecoration(
-        color: backgroundColor,
-        border: Border.all(
-          color: canEditAssignedItem
-              ? AppColors.teal.withValues(alpha: .45)
-              : AppColors.border,
-        ),
-        borderRadius: BorderRadius.circular(16.r),
+        color: AppColors.background,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(18.r),
       ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (disabled) ...[
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'المادة محالة مسبقاً',
-                      style: TextStyle(
-                        color: AppColors.muted,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            spacing: 10.w,
+            runSpacing: 10.h,
+            children: [
+              _AwardStatTile(
+                icon: Icons.inventory_2_outlined,
+                label: 'إجمالي المواد',
+                value: '$total',
+                color: AppColors.deepBlue,
               ),
-              SizedBox(height: 6.h),
-              OutlinedButton.icon(
-                onPressed: onEditItem,
-                icon: const Icon(Icons.edit_outlined, size: 18),
-                label: const Text('تفعيل التعديل'),
+              _AwardStatTile(
+                icon: Icons.task_alt,
+                label: 'مواد محالة',
+                value: '$assigned',
+                color: AppColors.success,
               ),
-              SizedBox(height: 8.h),
+              _AwardStatTile(
+                icon: Icons.hourglass_empty,
+                label: 'بانتظار الإحالة',
+                value: '${total - assigned}',
+                color: AppColors.gold,
+              ),
+              _AwardStatTile(
+                icon: Icons.domain_outlined,
+                label: 'الشركات المشاركة',
+                value: '${board.suppliers.length}',
+                color: AppColors.teal,
+              ),
+              _AwardStatTile(
+                icon: Icons.payments_outlined,
+                label: 'قيمة الإحالات',
+                value: _awardAmount(board.assignedTotal),
+                color: AppColors.primaryDark,
+              ),
             ],
-            if (offers.isEmpty)
-              const Text(
-                'لا يوجد عرض لهذه الشركة',
-                style: TextStyle(color: AppColors.muted),
+          ),
+          SizedBox(height: 12.h),
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 8,
+                    color: AppColors.success,
+                    backgroundColor: AppColors.border,
+                  ),
+                ),
+              ),
+              SizedBox(width: 10.w),
+              Text(
+                'نسبة الإنجاز ${(progress * 100).round()}%',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.muted,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AwardStatTile extends StatelessWidget {
+  const _AwardStatTile({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minWidth: 170),
+      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border.all(color: color.withValues(alpha: .2)),
+        borderRadius: BorderRadius.circular(14.r),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: EdgeInsets.all(8.r),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: .1),
+              borderRadius: BorderRadius.circular(10.r),
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          SizedBox(width: 10.w),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(color: AppColors.muted, fontSize: 12),
+              ),
+              Text(
+                value,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AwardToolbar extends StatelessWidget {
+  const _AwardToolbar({
+    required this.view,
+    required this.filter,
+    required this.board,
+    required this.onViewChanged,
+    required this.onFilterChanged,
+    required this.onQueryChanged,
+  });
+
+  final _AwardView view;
+  final _AwardFilter filter;
+  final _AwardBoard board;
+  final ValueChanged<_AwardView> onViewChanged;
+  final ValueChanged<_AwardFilter> onFilterChanged;
+  final ValueChanged<String> onQueryChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = board.items.length;
+    final assigned = board.assignedCount;
+    return Wrap(
+      spacing: 12.w,
+      runSpacing: 10.h,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        SegmentedButton<_AwardView>(
+          segments: const [
+            ButtonSegment(
+              value: _AwardView.byItem,
+              icon: Icon(Icons.inventory_2_outlined),
+              label: Text('حسب المادة'),
+            ),
+            ButtonSegment(
+              value: _AwardView.bySupplier,
+              icon: Icon(Icons.domain_outlined),
+              label: Text('حسب الشركة'),
+            ),
+          ],
+          selected: {view},
+          onSelectionChanged: (selection) => onViewChanged(selection.first),
+        ),
+        SizedBox(
+          width: 280,
+          child: TextField(
+            onChanged: onQueryChanged,
+            decoration: const InputDecoration(
+              isDense: true,
+              prefixIcon: Icon(Icons.search),
+              hintText: 'بحث برقم المادة أو الوصف أو الشركة',
+            ),
+          ),
+        ),
+        Wrap(
+          spacing: 8.w,
+          children: [
+            ChoiceChip(
+              label: Text('الكل ($total)'),
+              selected: filter == _AwardFilter.all,
+              onSelected: (_) => onFilterChanged(_AwardFilter.all),
+            ),
+            ChoiceChip(
+              label: Text('بانتظار الإحالة (${total - assigned})'),
+              selected: filter == _AwardFilter.pending,
+              onSelected: (_) => onFilterChanged(_AwardFilter.pending),
+            ),
+            ChoiceChip(
+              label: Text('محالة ($assigned)'),
+              selected: filter == _AwardFilter.assigned,
+              onSelected: (_) => onFilterChanged(_AwardFilter.assigned),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _AwardEmptyResult extends StatelessWidget {
+  const _AwardEmptyResult();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 24.h),
+      child: const Center(
+        child: Text(
+          'لا توجد نتائج مطابقة للبحث أو الفلتر الحالي.',
+          style: TextStyle(color: AppColors.muted),
+        ),
+      ),
+    );
+  }
+}
+
+class _AwardItemCard extends StatelessWidget {
+  const _AwardItemCard({
+    super.key,
+    required this.item,
+    required this.board,
+    required this.editing,
+    required this.loadingOfferIds,
+    required this.onAssign,
+    required this.onStartEdit,
+    required this.onCancelEdit,
+  });
+
+  final _AwardItem item;
+  final _AwardBoard board;
+  final bool editing;
+  final Set<int> loadingOfferIds;
+  final void Function(SupplierItemOffer offer, String assignmentType) onAssign;
+  final VoidCallback onStartEdit;
+  final VoidCallback onCancelEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = editing
+        ? AppColors.teal
+        : item.isAssigned
+        ? AppColors.success
+        : AppColors.gold;
+    final lowest = item.offers.where((offer) => offer.price != null);
+    return Material(
+      color: AppColors.surface,
+      shape: RoundedRectangleBorder(
+        side: BorderSide(color: accent.withValues(alpha: .35)),
+        borderRadius: BorderRadius.circular(18.r),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          key: PageStorageKey('award-item-tile-${item.itemId}'),
+          initiallyExpanded: !item.isAssigned || editing,
+          tilePadding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
+          childrenPadding: EdgeInsets.fromLTRB(14.w, 0, 14.w, 14.h),
+          leading: _AwardItemNumberBadge(label: item.label, color: accent),
+          title: Text(
+            item.title,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: Padding(
+            padding: EdgeInsets.only(top: 6.h),
+            child: Wrap(
+              spacing: 8.w,
+              runSpacing: 6.h,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _AwardMetaText(
+                  icon: Icons.straighten,
+                  text:
+                      'الكمية: ${_awardAmount(item.quantity)} ${item.unit ?? ''}',
+                ),
+                _AwardMetaText(
+                  icon: Icons.domain_outlined,
+                  text:
+                      'عروض: ${item.offers.length} من ${item.supplierCount} شركة',
+                ),
+                if (lowest.isNotEmpty)
+                  _AwardMetaText(
+                    icon: Icons.trending_down,
+                    text: 'أقل سعر: ${_awardAmount(lowest.first.price)}',
+                  ),
+                _AwardItemStatusPill(item: item, editing: editing),
+              ],
+            ),
+          ),
+          children: [
+            if (editing)
+              _AwardEditBanner(itemLabel: item.label, onCancel: onCancelEdit),
+            if (item.offers.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  'لا توجد عروض أسعار لهذه المادة.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
               )
             else
-              ...offers.map(
-                (offer) => Padding(
-                  padding: EdgeInsets.only(bottom: 8.h),
-                  child: _AssignmentOfferCard(
-                    offer: offer,
-                    loading: loadingOfferIds.contains(offer.id),
-                    enabled: !disabled,
-                    editing: canEditAssignedItem,
-                    onAssign: onAssign,
-                  ),
+              ...item.offers.asMap().entries.map(
+                (entry) => _AwardOfferTile(
+                  offer: entry.value,
+                  rank: entry.key + 1,
+                  title:
+                      entry.value.supplierName ??
+                      'شركة ${entry.value.supplierId}',
+                  isLowest: board.isLowest(entry.value),
+                  assignment: board.assignmentByOfferId[entry.value.id],
+                  itemAssigned: item.isAssigned,
+                  editing: editing,
+                  loading: loadingOfferIds.contains(entry.value.id),
+                  onAssign: onAssign,
+                  onStartEdit: onStartEdit,
                 ),
               ),
           ],
@@ -2305,114 +2683,546 @@ class _AssignmentMatrixCell extends StatelessWidget {
   }
 }
 
-class _AssignmentOfferCard extends StatelessWidget {
-  const _AssignmentOfferCard({
-    required this.offer,
-    required this.loading,
-    required this.enabled,
-    required this.editing,
+class _AwardSupplierCard extends StatelessWidget {
+  const _AwardSupplierCard({
+    super.key,
+    required this.supplier,
+    required this.visibleOffers,
+    required this.board,
+    required this.editingTenderItemId,
+    required this.loadingOfferIds,
     required this.onAssign,
+    required this.onStartEdit,
   });
 
-  final SupplierItemOffer offer;
-  final bool loading;
-  final bool enabled;
-  final bool editing;
+  final _AwardSupplier supplier;
+  final List<SupplierItemOffer> visibleOffers;
+  final _AwardBoard board;
+  final int? editingTenderItemId;
+  final Set<int> loadingOfferIds;
   final void Function(SupplierItemOffer offer, String assignmentType) onAssign;
+  final ValueChanged<int> onStartEdit;
 
   @override
   Widget build(BuildContext context) {
-    final label = offer.hasAlternative ? 'بديل' : 'أساسي';
-    final labelColor = offer.hasAlternative ? AppColors.gold : AppColors.teal;
-    return Container(
-      width: double.infinity,
-      padding: EdgeInsets.all(10.r),
-      decoration: BoxDecoration(
-        color: offer.hasAlternative
-            ? AppColors.gold.withValues(alpha: .08)
-            : Colors.white,
-        border: Border.all(color: labelColor.withValues(alpha: .25)),
-        borderRadius: BorderRadius.circular(14.r),
+    final wonAssignments = supplier.offers
+        .map((offer) => board.assignmentByOfferId[offer.id])
+        .whereType<ItemAssignment>()
+        .toList();
+    final wonTotal = wonAssignments.fold<num>(
+      0,
+      (sum, a) => sum + (a.assignedPrice ?? a.price ?? 0),
+    );
+    final offeredItems = supplier.offers.map((o) => o.itemId).toSet().length;
+    final color = wonAssignments.isEmpty ? AppColors.muted : AppColors.success;
+    return Material(
+      color: AppColors.surface,
+      shape: RoundedRectangleBorder(
+        side: const BorderSide(color: AppColors.border),
+        borderRadius: BorderRadius.circular(18.r),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          key: PageStorageKey('award-supplier-tile-${supplier.id}'),
+          initiallyExpanded: true,
+          tilePadding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
+          childrenPadding: EdgeInsets.fromLTRB(14.w, 0, 14.w, 14.h),
+          leading: CircleAvatar(
+            backgroundColor: AppColors.deepBlue.withValues(alpha: .08),
+            foregroundColor: AppColors.deepBlue,
+            child: Text(
+              supplier.name.trim().isEmpty
+                  ? '؟'
+                  : supplier.name.trim().characters.first,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+          title: Text(
+            supplier.name,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: Padding(
+            padding: EdgeInsets.only(top: 6.h),
+            child: Wrap(
+              spacing: 8.w,
+              runSpacing: 6.h,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _AwardMetaText(
+                  icon: Icons.inventory_2_outlined,
+                  text: 'قدمت عروضاً على $offeredItems مادة',
+                ),
+                _AwardPill(
+                  icon: Icons.task_alt,
+                  label: 'محال عليها: ${wonAssignments.length} مادة',
+                  color: color,
+                ),
+                if (wonAssignments.isNotEmpty)
+                  _AwardMetaText(
+                    icon: Icons.payments_outlined,
+                    text: 'قيمة الإحالة: ${_awardAmount(wonTotal)}',
+                  ),
+              ],
+            ),
+          ),
+          children: visibleOffers.map((offer) {
+            final item = board.itemById[offer.itemId];
+            final editing = editingTenderItemId == offer.itemId;
+            return _AwardOfferTile(
+              offer: offer,
+              title: item == null
+                  ? 'مادة ${offer.itemNo ?? offer.itemId}'
+                  : '${item.label} - ${item.title}',
+              leadingLabel: item?.label ?? offer.itemNo,
+              isLowest: board.isLowest(offer),
+              assignment: board.assignmentByOfferId[offer.id],
+              itemAssigned: item?.isAssigned ?? false,
+              assignedElsewhereTo: _assignedElsewhereTo(item, offer),
+              editing: editing,
+              loading: loadingOfferIds.contains(offer.id),
+              onAssign: onAssign,
+              onStartEdit: () => onStartEdit(offer.itemId),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  String? _assignedElsewhereTo(_AwardItem? item, SupplierItemOffer offer) {
+    if (item == null || !item.isAssigned) return null;
+    if (board.assignmentByOfferId.containsKey(offer.id)) return null;
+    return item.assignments.first.supplierName ?? 'شركة أخرى';
+  }
+}
+
+class _AwardItemNumberBadge extends StatelessWidget {
+  const _AwardItemNumberBadge({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    // Fixed size: ListTile.leading must not expand to the tile width.
+    return Container(
+      width: 52,
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(12.r),
+      ),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.w800,
+            fontSize: 15,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AwardItemStatusPill extends StatelessWidget {
+  const _AwardItemStatusPill({required this.item, required this.editing});
+
+  final _AwardItem item;
+  final bool editing;
+
+  @override
+  Widget build(BuildContext context) {
+    if (editing) {
+      return const _AwardPill(
+        icon: Icons.edit_note_outlined,
+        label: 'وضع تغيير الإحالة',
+        color: AppColors.teal,
+      );
+    }
+    if (!item.isAssigned) {
+      return const _AwardPill(
+        icon: Icons.hourglass_empty,
+        label: 'بانتظار الإحالة',
+        color: AppColors.gold,
+      );
+    }
+    final assignment = item.assignments.first;
+    return _AwardPill(
+      icon: Icons.task_alt,
+      label:
+          'محالة ${assignment.isTechnical ? 'فنياً' : 'رئيسياً'} إلى ${assignment.supplierName ?? '-'}',
+      color: AppColors.success,
+    );
+  }
+}
+
+class _AwardPill extends StatelessWidget {
+  const _AwardPill({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .1),
+        border: Border.all(color: color.withValues(alpha: .25)),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
-                decoration: BoxDecoration(
-                  color: labelColor.withValues(alpha: .12),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    color: labelColor,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              const Spacer(),
-              Text(
-                'السعر: ${offer.price?.toString() ?? '-'}',
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-            ],
-          ),
-          SizedBox(height: 8.h),
-          Text(
-            offer.hasAlternative
-                ? offer.alternativeDescription ?? offer.description ?? '-'
-                : offer.description ?? '-',
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          SizedBox(height: 4.h),
-          Text(
-            'سعر الوحدة: ${offer.unitPrice?.toString() ?? '-'} | بلد المنشأ: ${offer.origin ?? '-'}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: AppColors.muted, fontSize: 12),
-          ),
-          if ((offer.note ?? '').trim().isNotEmpty) ...[
-            SizedBox(height: 4.h),
-            Text(
-              offer.note!,
-              maxLines: 2,
+          Icon(icon, size: 15, color: color),
+          SizedBox(width: 4.w),
+          Flexible(
+            child: Text(
+              label,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ],
-          SizedBox(height: 10.h),
-          Wrap(
-            spacing: 8.w,
-            runSpacing: 8.h,
-            children: [
-              _AssignmentTableButton(
-                label: editing ? 'تعديل فنية' : 'فنية',
-                icon: Icons.engineering_outlined,
-                loading: loading,
-                filled: false,
-                color: AppColors.teal,
-                enabled: enabled,
-                onPressed: () => onAssign(offer, 'TEC'),
-              ),
-              _AssignmentTableButton(
-                label: editing ? 'تعديل رئيسية' : 'رئيسية',
-                icon: Icons.verified_outlined,
-                loading: loading,
-                filled: true,
-                color: AppColors.deepBlue,
-                enabled: enabled,
-                onPressed: () => onAssign(offer, 'MAIN'),
-              ),
-            ],
           ),
         ],
       ),
+    );
+  }
+}
+
+class _AwardMetaText extends StatelessWidget {
+  const _AwardMetaText({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 15, color: AppColors.muted),
+        SizedBox(width: 4.w),
+        Text(
+          text,
+          style: const TextStyle(color: AppColors.muted, fontSize: 12),
+        ),
+      ],
+    );
+  }
+}
+
+class _AwardEditBanner extends StatelessWidget {
+  const _AwardEditBanner({required this.itemLabel, required this.onCancel});
+
+  final String itemLabel;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.only(bottom: 10.h),
+      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
+      decoration: BoxDecoration(
+        color: AppColors.teal.withValues(alpha: .08),
+        border: Border.all(color: AppColors.teal.withValues(alpha: .3)),
+        borderRadius: BorderRadius.circular(14.r),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.edit_note_outlined, color: AppColors.teal),
+          SizedBox(width: 8.w),
+          Expanded(
+            child: Text(
+              'اختر عرضاً آخر للمادة $itemLabel لإعادة الإحالة.',
+              style: const TextStyle(color: AppColors.teal),
+            ),
+          ),
+          TextButton(onPressed: onCancel, child: const Text('إلغاء التعديل')),
+        ],
+      ),
+    );
+  }
+}
+
+class _AwardOfferTile extends StatelessWidget {
+  const _AwardOfferTile({
+    required this.offer,
+    required this.title,
+    required this.isLowest,
+    required this.assignment,
+    required this.itemAssigned,
+    required this.editing,
+    required this.loading,
+    required this.onAssign,
+    required this.onStartEdit,
+    this.rank,
+    this.leadingLabel,
+    this.assignedElsewhereTo,
+  });
+
+  final SupplierItemOffer offer;
+  final String title;
+  final bool isLowest;
+  final ItemAssignment? assignment;
+  final bool itemAssigned;
+  final bool editing;
+  final bool loading;
+  final void Function(SupplierItemOffer offer, String assignmentType) onAssign;
+  final VoidCallback onStartEdit;
+  final int? rank;
+  final String? leadingLabel;
+  final String? assignedElsewhereTo;
+
+  @override
+  Widget build(BuildContext context) {
+    final isAssigned = assignment != null;
+    final locked = itemAssigned && !editing;
+    final borderColor = isAssigned
+        ? AppColors.success
+        : isLowest
+        ? AppColors.gold
+        : AppColors.border;
+    return Opacity(
+      opacity: locked && !isAssigned ? .6 : 1,
+      child: Container(
+        margin: EdgeInsets.only(bottom: 8.h),
+        padding: EdgeInsets.all(12.r),
+        decoration: BoxDecoration(
+          color: isAssigned
+              ? AppColors.success.withValues(alpha: .06)
+              : offer.hasAlternative
+              ? AppColors.gold.withValues(alpha: .05)
+              : AppColors.background,
+          border: Border.all(
+            color: borderColor.withValues(alpha: isAssigned ? .6 : .5),
+            width: isAssigned ? 1.4 : 1,
+          ),
+          borderRadius: BorderRadius.circular(14.r),
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final details = _details();
+            final actions = _actions();
+            if (constraints.maxWidth < 720) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  details,
+                  SizedBox(height: 10.h),
+                  actions,
+                ],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: details),
+                SizedBox(width: 12.w),
+                actions,
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _details() {
+    final description = offer.hasAlternative
+        ? offer.alternativeDescription ?? offer.description
+        : null;
+    final note = offer.note?.trim();
+    final rankOrLabel = leadingLabel ?? (rank == null ? null : '$rank');
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (rankOrLabel != null) ...[
+          Container(
+            constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+            padding: EdgeInsets.symmetric(horizontal: 6.w),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(9.r),
+            ),
+            child: Text(
+              rankOrLabel,
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                color: AppColors.muted,
+              ),
+            ),
+          ),
+          SizedBox(width: 10.w),
+        ],
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 8.w,
+                runSpacing: 6.h,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15,
+                    ),
+                  ),
+                  _AwardPill(
+                    icon: offer.hasAlternative
+                        ? Icons.swap_horiz
+                        : Icons.check_box_outlined,
+                    label: offer.hasAlternative ? 'بديل' : 'أساسي',
+                    color: offer.hasAlternative
+                        ? AppColors.gold
+                        : AppColors.deepBlue,
+                  ),
+                  if (isLowest)
+                    const _AwardPill(
+                      icon: Icons.trending_down,
+                      label: 'الأقل سعراً',
+                      color: AppColors.gold,
+                    ),
+                  if (assignment != null)
+                    _AwardPill(
+                      icon: Icons.verified,
+                      label:
+                          'محالة ${assignment!.isTechnical ? 'فنية' : 'رئيسية'} بسعر ${_awardAmount(assignment!.assignedPrice ?? assignment!.price)}',
+                      color: AppColors.success,
+                    ),
+                  if (assignedElsewhereTo != null)
+                    _AwardPill(
+                      icon: Icons.lock_outline,
+                      label: 'محالة إلى $assignedElsewhereTo',
+                      color: AppColors.muted,
+                    ),
+                ],
+              ),
+              if (description != null && description.trim().isNotEmpty) ...[
+                SizedBox(height: 6.h),
+                Text(
+                  'وصف البديل: $description',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+              SizedBox(height: 6.h),
+              Wrap(
+                spacing: 14.w,
+                runSpacing: 4.h,
+                children: [
+                  _AwardMetaText(
+                    icon: Icons.sell_outlined,
+                    text: 'سعر الوحدة: ${_awardAmount(offer.unitPrice)}',
+                  ),
+                  _AwardMetaText(
+                    icon: Icons.public,
+                    text: 'بلد المنشأ: ${offer.origin ?? '-'}',
+                  ),
+                  if (note != null && note.isNotEmpty)
+                    _AwardMetaText(
+                      icon: Icons.sticky_note_2_outlined,
+                      text: note,
+                    ),
+                  if ((assignment?.assignmentNote ?? '').trim().isNotEmpty)
+                    _AwardMetaText(
+                      icon: Icons.comment_outlined,
+                      text:
+                          'ملاحظة الإحالة: ${assignment!.assignmentNote!.trim()}',
+                    ),
+                  if (assignment?.createdAt != null)
+                    _AwardMetaText(
+                      icon: Icons.event_outlined,
+                      text: AppDateFormatter.dateTime(assignment!.createdAt),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _actions() {
+    final price = Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          'السعر الإجمالي',
+          style: TextStyle(color: AppColors.muted, fontSize: 12),
+        ),
+        Text(
+          _awardAmount(offer.price),
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+            color: isLowest ? AppColors.primaryDark : AppColors.text,
+          ),
+        ),
+      ],
+    );
+    final Widget buttons;
+    if (assignment != null && !editing) {
+      buttons = OutlinedButton.icon(
+        onPressed: onStartEdit,
+        icon: const Icon(Icons.edit_outlined, size: 18),
+        label: const Text('تغيير الإحالة'),
+      );
+    } else {
+      final enabled = !itemAssigned || editing;
+      buttons = Wrap(
+        spacing: 8.w,
+        runSpacing: 8.h,
+        children: [
+          _AssignmentTableButton(
+            label: editing ? 'تعديل فنية' : 'فنية',
+            icon: Icons.engineering_outlined,
+            loading: loading,
+            filled: false,
+            color: AppColors.teal,
+            enabled: enabled,
+            onPressed: () => onAssign(offer, 'TEC'),
+          ),
+          _AssignmentTableButton(
+            label: editing ? 'تعديل رئيسية' : 'رئيسية',
+            icon: Icons.verified_outlined,
+            loading: loading,
+            filled: true,
+            color: AppColors.deepBlue,
+            enabled: enabled,
+            onPressed: () => onAssign(offer, 'MAIN'),
+          ),
+        ],
+      );
+    }
+    return Wrap(
+      spacing: 16.w,
+      runSpacing: 8.h,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      alignment: WrapAlignment.end,
+      children: [price, buttons],
     );
   }
 }
@@ -2486,73 +3296,6 @@ class _AssignmentTableButton extends StatelessWidget {
       onPressed: loading || !enabled ? null : onPressed,
       style: style,
       child: child,
-    );
-  }
-}
-
-class _ItemAssignmentsTable extends StatelessWidget {
-  const _ItemAssignmentsTable({
-    required this.assignments,
-    required this.onEdit,
-  });
-
-  final List<ItemAssignment> assignments;
-  final ValueChanged<ItemAssignment> onEdit;
-
-  @override
-  Widget build(BuildContext context) {
-    return _HorizontalTableScroll(
-      minWidth: 1180,
-      child: DataTable(
-        columns: const [
-          DataColumn(label: Text('المورد')),
-          DataColumn(label: Text('معرف المادة')),
-          DataColumn(label: Text('نوع الإحالة')),
-          DataColumn(label: Text('سعر العرض')),
-          DataColumn(label: Text('السعر المحال')),
-          DataColumn(label: Text('بديل')),
-          DataColumn(label: Text('ملاحظة العرض')),
-          DataColumn(label: Text('ملاحظة الإحالة')),
-          DataColumn(label: Text('تاريخ الإحالة')),
-          DataColumn(label: Text('تعديل')),
-        ],
-        rows: assignments
-            .map(
-              (assignment) => DataRow(
-                cells: [
-                  DataCell(Text(assignment.supplierName ?? '-')),
-                  DataCell(Text(assignment.tenderItemId.toString())),
-                  DataCell(Text(assignment.isTechnical ? 'فنية' : 'رئيسية')),
-                  DataCell(Text(assignment.price?.toString() ?? '-')),
-                  DataCell(Text(assignment.assignedPrice?.toString() ?? '-')),
-                  DataCell(Text(assignment.hasAlternative ? 'نعم' : 'لا')),
-                  DataCell(
-                    SizedBox(
-                      width: 180,
-                      child: Text(assignment.offerNote ?? '-'),
-                    ),
-                  ),
-                  DataCell(
-                    SizedBox(
-                      width: 180,
-                      child: Text(assignment.assignmentNote ?? '-'),
-                    ),
-                  ),
-                  DataCell(
-                    Text(AppDateFormatter.dateTime(assignment.createdAt)),
-                  ),
-                  DataCell(
-                    OutlinedButton.icon(
-                      onPressed: () => onEdit(assignment),
-                      icon: const Icon(Icons.edit_outlined, size: 18),
-                      label: const Text('تعديل'),
-                    ),
-                  ),
-                ],
-              ),
-            )
-            .toList(),
-      ),
     );
   }
 }
