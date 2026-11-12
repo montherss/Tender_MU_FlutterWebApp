@@ -30,7 +30,8 @@ class AuthenticatedFileOpener {
         throw const AppException('الملف فارغ أو غير متوفر');
       }
 
-      final resolvedName = fileName ??
+      final resolvedName =
+          fileName ??
           _fileNameFromContentDisposition(
             response.headers.value('content-disposition'),
           ) ??

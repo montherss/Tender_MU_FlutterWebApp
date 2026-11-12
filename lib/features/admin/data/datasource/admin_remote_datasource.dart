@@ -19,9 +19,7 @@ class AdminRemoteDataSource {
     );
     final data = _asMap(response.data);
     if (data['success'] == false) {
-      throw AppException(
-        data['message']?.toString() ?? 'تعذر إنشاء المستخدم',
-      );
+      throw AppException(data['message']?.toString() ?? 'تعذر إنشاء المستخدم');
     }
   }
 
@@ -45,9 +43,7 @@ class AdminRemoteDataSource {
     );
     final data = _asMap(response.data);
     if (data['success'] == false) {
-      throw AppException(
-        data['message']?.toString() ?? 'تعذر إضافة المورد',
-      );
+      throw AppException(data['message']?.toString() ?? 'تعذر إضافة المورد');
     }
   }
 }

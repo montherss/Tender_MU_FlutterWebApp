@@ -146,10 +146,7 @@ class _CompactLayout extends StatelessWidget {
     return Column(
       children: [
         _CompactHeader(userName: userName, role: role),
-        _TabBar(
-          selectedIndex: selectedIndex,
-          onSelectIndex: onSelectIndex,
-        ),
+        _TabBar(selectedIndex: selectedIndex, onSelectIndex: onSelectIndex),
         Expanded(
           child: SingleChildScrollView(
             padding: EdgeInsets.all(16.r),
@@ -327,8 +324,7 @@ class _Sidebar extends StatelessWidget {
             padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 24.h),
             child: BlocBuilder<AuthCubit, AuthState>(
               builder: (context, authState) {
-                final isLoggingOut =
-                    authState.status == AuthStatus.loggingOut;
+                final isLoggingOut = authState.status == AuthStatus.loggingOut;
                 return TextButton.icon(
                   onPressed: isLoggingOut
                       ? null
@@ -412,9 +408,7 @@ class _SidebarItem extends StatelessWidget {
                     color: isSelected
                         ? Colors.white
                         : Colors.white.withValues(alpha: .75),
-                    fontWeight: isSelected
-                        ? FontWeight.w700
-                        : FontWeight.w500,
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
                     fontSize: 14,
                   ),
                 ),
@@ -459,17 +453,16 @@ class _TopBar extends StatelessWidget {
         children: [
           Text(
             'لوحة تحكم المدير',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w800,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
           ),
           const Spacer(),
           _UserChip(userName: userName, role: role),
           SizedBox(width: 12.w),
           BlocBuilder<AuthCubit, AuthState>(
             builder: (context, authState) {
-              final isLoggingOut =
-                  authState.status == AuthStatus.loggingOut;
+              final isLoggingOut = authState.status == AuthStatus.loggingOut;
               return isLoggingOut
                   ? const SizedBox(
                       width: 20,
@@ -556,8 +549,7 @@ class _CompactHeader extends StatelessWidget {
           ),
           BlocBuilder<AuthCubit, AuthState>(
             builder: (context, authState) {
-              final isLoggingOut =
-                  authState.status == AuthStatus.loggingOut;
+              final isLoggingOut = authState.status == AuthStatus.loggingOut;
               return isLoggingOut
                   ? const SizedBox(
                       width: 20,
@@ -586,10 +578,7 @@ class _CompactHeader extends StatelessWidget {
 // ─── Tab Bar (compact) ───────────────────────────────────────────────────────
 
 class _TabBar extends StatelessWidget {
-  const _TabBar({
-    required this.selectedIndex,
-    required this.onSelectIndex,
-  });
+  const _TabBar({required this.selectedIndex, required this.onSelectIndex});
 
   final int selectedIndex;
   final ValueChanged<int> onSelectIndex;
@@ -786,10 +775,10 @@ class _AddUserPanelState extends State<_AddUserPanel> {
     if (!_formKey.currentState!.validate()) return;
     FocusScope.of(context).unfocus();
     context.read<AdminCubit>().createUser(
-          userName: _userNameCtrl.text.trim(),
-          password: _passwordCtrl.text,
-          role: _selectedRole,
-        );
+      userName: _userNameCtrl.text.trim(),
+      password: _passwordCtrl.text,
+      role: _selectedRole,
+    );
   }
 
   @override
@@ -911,7 +900,9 @@ class _AddUserPanelState extends State<_AddUserPanel> {
                               ),
                             )
                           : const Icon(Icons.person_add_rounded),
-                      label: Text(isLoading ? 'جاري الإنشاء...' : 'إنشاء الحساب'),
+                      label: Text(
+                        isLoading ? 'جاري الإنشاء...' : 'إنشاء الحساب',
+                      ),
                     ),
                   );
                 },
@@ -957,12 +948,12 @@ class _AddSupplierPanelState extends State<_AddSupplierPanel> {
     if (!_formKey.currentState!.validate()) return;
     FocusScope.of(context).unfocus();
     context.read<AdminCubit>().addSupplier(
-          externalSupplierId: _idCtrl.text.trim(),
-          name: _nameCtrl.text.trim(),
-          type: _selectedType,
-          contactInfo: _contactCtrl.text.trim(),
-          isManual: _isManual ? 1 : 0,
-        );
+      externalSupplierId: _idCtrl.text.trim(),
+      name: _nameCtrl.text.trim(),
+      type: _selectedType,
+      contactInfo: _contactCtrl.text.trim(),
+      isManual: _isManual ? 1 : 0,
+    );
   }
 
   @override
@@ -996,8 +987,9 @@ class _AddSupplierPanelState extends State<_AddSupplierPanel> {
               LayoutBuilder(
                 builder: (context, constraints) {
                   final isWide = constraints.maxWidth >= 560;
-                  final fieldWidth =
-                      isWide ? (constraints.maxWidth - 16) / 2 : double.infinity;
+                  final fieldWidth = isWide
+                      ? (constraints.maxWidth - 16) / 2
+                      : double.infinity;
 
                   return Wrap(
                     spacing: 16,
@@ -1069,9 +1061,7 @@ class _AddSupplierPanelState extends State<_AddSupplierPanel> {
                                   .map(
                                     (t) => DropdownMenuItem(
                                       value: t,
-                                      child: Text(
-                                        '${_typeLabels[t]} ($t)',
-                                      ),
+                                      child: Text('${_typeLabels[t]} ($t)'),
                                     ),
                                   )
                                   .toList(),
@@ -1175,7 +1165,9 @@ class _AddSupplierPanelState extends State<_AddSupplierPanel> {
                               ),
                             )
                           : const Icon(Icons.add_business_rounded),
-                      label: Text(isLoading ? 'جاري الإضافة...' : 'إضافة المورد'),
+                      label: Text(
+                        isLoading ? 'جاري الإضافة...' : 'إضافة المورد',
+                      ),
                     ),
                   );
                 },
@@ -1234,9 +1226,7 @@ class _FormCard extends StatelessWidget {
               borderRadius: const BorderRadius.vertical(
                 top: Radius.circular(24),
               ),
-              border: const Border(
-                bottom: BorderSide(color: AppColors.border),
-              ),
+              border: const Border(bottom: BorderSide(color: AppColors.border)),
             ),
             child: Row(
               children: [
@@ -1273,10 +1263,7 @@ class _FormCard extends StatelessWidget {
               ],
             ),
           ),
-          Padding(
-            padding: EdgeInsets.all(24.r),
-            child: child,
-          ),
+          Padding(padding: EdgeInsets.all(24.r), child: child),
         ],
       ),
     );

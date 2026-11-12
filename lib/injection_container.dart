@@ -65,8 +65,6 @@ Future<void> configureDependencies() async {
     ..registerLazySingleton<AdminRemoteDataSource>(
       () => AdminRemoteDataSource(sl()),
     )
-    ..registerLazySingleton<AdminRepository>(
-      () => AdminRepositoryImpl(sl()),
-    )
+    ..registerLazySingleton<AdminRepository>(() => AdminRepositoryImpl(sl()))
     ..registerFactory(() => AdminCubit(sl()));
 }

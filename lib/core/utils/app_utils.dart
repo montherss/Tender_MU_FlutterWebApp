@@ -9,8 +9,10 @@ class AppDateFormatter {
   static final _date = DateFormat('yyyy/MM/dd', 'ar');
   static final _dateTime = DateFormat('yyyy/MM/dd - HH:mm', 'ar');
 
-  static String date(DateTime? value) => value == null ? '-' : _date.format(value);
-  static String dateTime(DateTime? value) => value == null ? '-' : _dateTime.format(value);
+  static String date(DateTime? value) =>
+      value == null ? '-' : _date.format(value);
+  static String dateTime(DateTime? value) =>
+      value == null ? '-' : _dateTime.format(value);
 }
 
 DateTime? parseDate(dynamic value) {

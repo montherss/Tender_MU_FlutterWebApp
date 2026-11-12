@@ -88,8 +88,10 @@ class _LoginPageState extends State<LoginPage> {
                           constraints: BoxConstraints(
                             maxWidth: isWide ? 1040 : 440,
                             minHeight: isWide
-                                ? (constraints.maxHeight - 48.h)
-                                    .clamp(480.0, 720.0)
+                                ? (constraints.maxHeight - 48.h).clamp(
+                                    480.0,
+                                    720.0,
+                                  )
                                 : 0,
                           ),
                           child: isWide
@@ -134,9 +136,9 @@ class _LoginPageState extends State<LoginPage> {
     if (isLoading || !_formKey.currentState!.validate()) return;
     FocusScope.of(context).unfocus();
     context.read<AuthCubit>().login(
-          userName: _userNameController.text,
-          password: _passwordController.text,
-        );
+      userName: _userNameController.text,
+      password: _passwordController.text,
+    );
   }
 }
 
@@ -331,9 +333,9 @@ class _CompactLoginCard extends StatelessWidget {
         Text(
           AppConstants.universityName,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: AppColors.muted,
-                fontWeight: FontWeight.w600,
-              ),
+            color: AppColors.muted,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ],
     );
@@ -365,27 +367,27 @@ class _BrandPanel extends StatelessWidget {
               AppConstants.universityName,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: Colors.white.withValues(alpha: .92),
-                    fontWeight: FontWeight.w600,
-                  ),
+                color: Colors.white.withValues(alpha: .92),
+                fontWeight: FontWeight.w600,
+              ),
             ),
             SizedBox(height: 8.h),
             Text(
               AppConstants.appTitle,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w800,
-                  ),
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
             ),
             SizedBox(height: 16.h),
             Text(
               'منصة موحدة لإدارة العطاءات والمواد والمرفقات والمتابعة الفنية.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Colors.white.withValues(alpha: .82),
-                    height: 1.6,
-                  ),
+                color: Colors.white.withValues(alpha: .82),
+                height: 1.6,
+              ),
             ),
             SizedBox(height: 28.h),
             const _BrandFeature(
@@ -524,9 +526,9 @@ class _LoginForm extends StatelessWidget {
             ],
             Text(
               'تسجيل الدخول',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
             ),
             SizedBox(height: 6.h),
             const Text(
@@ -564,7 +566,9 @@ class _LoginForm extends StatelessWidget {
                 labelText: 'كلمة المرور',
                 prefixIcon: const Icon(Icons.lock_outline_rounded),
                 suffixIcon: IconButton(
-                  tooltip: obscurePassword ? 'إظهار كلمة المرور' : 'إخفاء كلمة المرور',
+                  tooltip: obscurePassword
+                      ? 'إظهار كلمة المرور'
+                      : 'إخفاء كلمة المرور',
                   onPressed: isLoading ? null : onTogglePassword,
                   icon: Icon(
                     obscurePassword

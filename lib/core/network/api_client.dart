@@ -17,9 +17,7 @@ class ApiClient {
         ),
       ) {
     dio.interceptors.add(AuthInterceptor(_tokenStore));
-    dio.interceptors.add(
-      UnauthorizedInterceptor(_sessionExpiredHandler),
-    );
+    dio.interceptors.add(UnauthorizedInterceptor(_sessionExpiredHandler));
     dio.interceptors.add(ApiLoggingInterceptor());
   }
 

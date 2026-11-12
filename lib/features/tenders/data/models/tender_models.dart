@@ -388,6 +388,8 @@ class ItemAssignmentModel extends ItemAssignment {
     super.offerNote,
     super.isAlternative,
     super.alternativeDescription,
+    super.itemNo,
+    super.description,
   });
 
   factory ItemAssignmentModel.fromJson(Map<String, dynamic> json) {
@@ -412,6 +414,12 @@ class ItemAssignmentModel extends ItemAssignment {
       offerNote: json['offerNote']?.toString(),
       isAlternative: _firstInt(json, ['isAlternative']),
       alternativeDescription: json['alternativeDescription']?.toString(),
+      itemNo: _firstString(json, ['itemNo', 'tenderItemNo']),
+      description: _firstString(json, [
+        'description',
+        'itemDescription',
+        'tenderItemDescription',
+      ]),
     );
   }
 }

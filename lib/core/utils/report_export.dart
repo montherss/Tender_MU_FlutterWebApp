@@ -22,10 +22,7 @@ Future<bool> exportPdfOrExcel({
     if (download) {
       await savePdfBytes(bytes, pdfFileName);
     } else {
-      await Printing.layoutPdf(
-        name: pdfFileName,
-        onLayout: (_) async => bytes,
-      );
+      await Printing.layoutPdf(name: pdfFileName, onLayout: (_) async => bytes);
     }
     return false;
   } catch (error) {

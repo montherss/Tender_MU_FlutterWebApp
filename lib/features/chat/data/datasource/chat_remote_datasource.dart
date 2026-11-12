@@ -15,7 +15,7 @@ class ChatRemoteDataSource {
         contentType: Headers.jsonContentType,
         sendTimeout: const Duration(minutes: 2),
         receiveTimeout: const Duration(minutes: 5),
-        ),
+      ),
     );
 
     final data = response.data;

@@ -515,6 +515,8 @@ class ItemAssignment extends Equatable {
     this.offerNote,
     this.isAlternative,
     this.alternativeDescription,
+    this.itemNo,
+    this.description,
   });
 
   final int assignmentId;
@@ -535,6 +537,10 @@ class ItemAssignment extends Equatable {
   final String? offerNote;
   final int? isAlternative;
   final String? alternativeDescription;
+
+  /// Item number/description when the API sends them with the assignment.
+  final String? itemNo;
+  final String? description;
 
   bool get isTechnical => assignmentType == 'TEC';
   bool get hasAlternative => isAlternative == 1;
@@ -559,6 +565,8 @@ class ItemAssignment extends Equatable {
     offerNote,
     isAlternative,
     alternativeDescription,
+    itemNo,
+    description,
   ];
 }
 

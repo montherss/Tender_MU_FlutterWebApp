@@ -11,6 +11,7 @@ import '../../../../core/utils/app_utils.dart';
 import '../../../../core/utils/authenticated_file_opener.dart';
 import '../../../../core/utils/excel_generator.dart';
 import '../../../../injection_container.dart';
+import '../../../../core/utils/pdf_file_saver.dart';
 import '../../../../core/utils/pdf_generator.dart';
 import '../../../../core/utils/report_export.dart';
 import '../../../../core/widgets/app_widgets.dart';
@@ -1856,6 +1857,7 @@ class _TenderItemAssignmentSectionState
   _AwardView _view = _AwardView.byItem;
   _AwardFilter _filter = _AwardFilter.all;
   String _query = '';
+  bool _exportingDecision = false;
 
   @override
   void initState() {
@@ -1952,6 +1954,19 @@ class _TenderItemAssignmentSectionState
                         ),
                   icon: const Icon(Icons.domain_outlined),
                   label: const Text('عرض إحالة الشركات'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: state.tender == null || _exportingDecision
+                      ? null
+                      : _exportAssignmentDecision,
+                  icon: _exportingDecision
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.table_view_outlined),
+                  label: const Text('كشف قرار الإحالة (Excel)'),
                 ),
                 IconButton(
                   onPressed: loading ? null : _refreshData,
@@ -2070,6 +2085,44 @@ class _TenderItemAssignmentSectionState
     final cubit = context.read<TenderDetailsCubit>();
     cubit.loadSupplierItemOffers();
     cubit.loadItemAssignments();
+  }
+
+  Future<void> _exportAssignmentDecision() async {
+    final state = widget.state;
+    final tender = state.tender;
+    if (tender == null) return;
+    if (state.itemAssignments.isEmpty) {
+      showAppSnackBar(context, message: 'لا توجد مواد محالة لطباعة الكشف');
+      return;
+    }
+    final draft = await showDialog<_AssignmentDecisionDraft>(
+      context: context,
+      builder: (_) => const _AssignmentDecisionDialog(),
+    );
+    if (draft == null || !mounted) return;
+    setState(() => _exportingDecision = true);
+    try {
+      final bytes = await TenderExcelGenerator.assignmentDecisionExcel(
+        tender,
+        state.tenderSuppliers,
+        state.itemAssignments,
+        decisionNo: draft.decisionNo,
+        decisionYear: draft.year,
+        deliveryPeriod: draft.deliveryPeriod,
+        offers: state.supplierItemOffers,
+      );
+      await saveExcelBytes(
+        Uint8List.fromList(bytes),
+        'assignment-decision-${draft.decisionNo}-${draft.year}.xlsx',
+      );
+      if (!mounted) return;
+      showAppSnackBar(context, message: 'تم إنشاء كشف قرار الإحالة');
+    } catch (_) {
+      if (!mounted) return;
+      showAppSnackBar(context, message: 'تعذر إنشاء كشف قرار الإحالة');
+    } finally {
+      if (mounted) setState(() => _exportingDecision = false);
+    }
   }
 
   void _refreshData() {
@@ -3296,6 +3349,119 @@ class _AssignmentTableButton extends StatelessWidget {
       onPressed: loading || !enabled ? null : onPressed,
       style: style,
       child: child,
+    );
+  }
+}
+
+class _AssignmentDecisionDraft {
+  const _AssignmentDecisionDraft({
+    required this.decisionNo,
+    required this.year,
+    required this.deliveryPeriod,
+  });
+
+  final String decisionNo;
+  final String year;
+  final String deliveryPeriod;
+}
+
+class _AssignmentDecisionDialog extends StatefulWidget {
+  const _AssignmentDecisionDialog();
+
+  @override
+  State<_AssignmentDecisionDialog> createState() =>
+      _AssignmentDecisionDialogState();
+}
+
+class _AssignmentDecisionDialogState extends State<_AssignmentDecisionDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _decisionNo = TextEditingController();
+  final _year = TextEditingController(text: '${DateTime.now().year}');
+  final _delivery = TextEditingController(text: '7 - 90 يوم');
+
+  @override
+  void dispose() {
+    _decisionNo.dispose();
+    _year.dispose();
+    _delivery.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('كشف قرار الإحالة'),
+      content: SizedBox(
+        width: 420,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _decisionNo,
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                        labelText: 'رقم قرار الإحالة',
+                      ),
+                      validator: (value) => (value ?? '').trim().isEmpty
+                          ? 'رقم القرار مطلوب'
+                          : null,
+                    ),
+                  ),
+                  SizedBox(width: 12.w),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _year,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: 'السنة'),
+                      validator: (value) {
+                        final year = int.tryParse((value ?? '').trim());
+                        return year == null || year < 2000
+                            ? 'أدخل سنة صحيحة'
+                            : null;
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 12.h),
+              TextFormField(
+                controller: _delivery,
+                decoration: const InputDecoration(
+                  labelText: 'مدة التسليم',
+                  helperText: 'تظهر في عمود التسليم لكل شركة',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('إلغاء'),
+        ),
+        ElevatedButton.icon(
+          onPressed: _submit,
+          icon: const Icon(Icons.download_outlined),
+          label: const Text('إنشاء الكشف'),
+        ),
+      ],
+    );
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.of(context).pop(
+      _AssignmentDecisionDraft(
+        decisionNo: _decisionNo.text.trim(),
+        year: _year.text.trim(),
+        deliveryPeriod: _delivery.text.trim(),
+      ),
     );
   }
 }

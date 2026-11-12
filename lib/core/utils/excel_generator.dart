@@ -1,8 +1,11 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:syncfusion_flutter_xlsio/xlsio.dart';
 
 import '../../features/tenders/domain/tender_domain.dart';
 import 'app_utils.dart';
+import 'arabic_amount_words.dart';
 
 /// Builds Excel workbooks that mirror the PDF reports in [TenderPdfGenerator].
 ///
@@ -527,6 +530,322 @@ class TenderExcelGenerator {
     return _save(workbook);
   }
 
+  /// كشف قرار الإحالة: for every company, the items assigned to it in
+  /// ascending item order. xlsio can't insert manual page breaks or header
+  /// images, so each printed page is its own worksheet (fit to one A4 page)
+  /// carrying the logo, the full decision header and the signatures.
+  static Future<List<int>> assignmentDecisionExcel(
+    TenderDetails tender,
+    List<Supplier> suppliers,
+    List<ItemAssignment> assignments, {
+    required String decisionNo,
+    required String decisionYear,
+    String? deliveryPeriod,
+    List<SupplierItemOffer> offers = const [],
+    int itemsPerPage = 10,
+  }) async {
+    tender = tender.withSortedItems();
+    final offersById = {for (final offer in offers) offer.id: offer};
+    final workbook = Workbook(0);
+    final styles = _DecisionStyles(workbook);
+    final logoBytes = await _loadDecisionLogoBytes();
+
+    final supplierNames = <String>[
+      for (final supplier in suppliers) supplier.displayName,
+    ];
+    for (final assignment in assignments) {
+      final name = assignment.supplierName?.trim();
+      if (name != null && name.isNotEmpty) supplierNames.add(name);
+    }
+    final activeSupplierNames = supplierNames
+        .toSet()
+        .where(
+          (name) =>
+              assignments.any((assignment) => assignment.supplierName == name),
+        )
+        .toList();
+
+    if (activeSupplierNames.isEmpty) {
+      final sheet = workbook.worksheets.addWithName('كشف الإحالة');
+      sheet.isRightToLeft = true;
+      sheet.getRangeByIndex(1, 1).text = 'لا توجد مواد محالة على أي شركة بعد.';
+      return _save(workbook);
+    }
+
+    final header = _DecisionHeader(
+      decisionLine:
+          'قرار إحالة رقم  ${decisionNo.trim()} / ${decisionYear.trim()}',
+      tenderLine: 'عطاء رقم ${tender.tenderNo ?? tender.id}',
+      subjectLine: 'الموضوع: ${tender.subject ?? '-'}',
+      deliveryPeriod: deliveryPeriod?.trim() ?? '',
+    );
+
+    for (final supplierEntry in activeSupplierNames.asMap().entries) {
+      final supplierName = supplierEntry.value;
+      final rows =
+          assignments
+              .where((assignment) => assignment.supplierName == supplierName)
+              .map(
+                (assignment) =>
+                    _DecisionRow.from(tender, assignment, offersById),
+              )
+              .toList()
+            ..sort((a, b) => compareItemNo(a.itemNo, b.itemNo));
+      final pageCount = (rows.length / itemsPerPage).ceil();
+      num total = 0;
+      for (final row in rows) {
+        total += row.subTotal ?? 0;
+      }
+
+      for (var page = 0; page < pageCount; page++) {
+        final pageRows = rows
+            .skip(page * itemsPerPage)
+            .take(itemsPerPage)
+            .toList();
+        final sheet = workbook.worksheets.addWithName(
+          _decisionSheetName(
+            supplierEntry.key + 1,
+            page + 1,
+            pageCount,
+            supplierName,
+          ),
+        );
+        _writeDecisionPage(
+          sheet,
+          styles,
+          header: header,
+          logoBytes: logoBytes,
+          sheetNo: supplierEntry.key + 1,
+          pageNo: page + 1,
+          pageCount: pageCount,
+          supplierName: supplierName,
+          rows: pageRows,
+          total: page == pageCount - 1 ? total : null,
+        );
+        await _maybeYield(page + 1, every: 5);
+      }
+    }
+    return _save(workbook);
+  }
+
+  static const _decisionColumnCount = 10;
+
+  static void _writeDecisionPage(
+    Worksheet sheet,
+    _DecisionStyles styles, {
+    required _DecisionHeader header,
+    required List<int>? logoBytes,
+    required int sheetNo,
+    required int pageNo,
+    required int pageCount,
+    required String supplierName,
+    required List<_DecisionRow> rows,
+    required num? total,
+  }) {
+    sheet.isRightToLeft = true;
+    sheet.showGridlines = false;
+    const widths = [9.0, 7.0, 10.0, 40.0, 12.0, 18.0, 12.0, 11.0, 12.0, 9.0];
+    for (var i = 0; i < widths.length; i++) {
+      sheet.getRangeByIndex(1, i + 1).columnWidth = widths[i];
+    }
+
+    void merged(int row, int from, int to, String text, Style style) {
+      final range = sheet.getRangeByIndex(row, from, row, to);
+      range.merge();
+      range.cellStyle = style;
+      sheet.getRangeByIndex(row, from).text = text;
+    }
+
+    // Letterhead: the colored university logo on both sides, with the
+    // university name centered between them.
+    const last = _decisionColumnCount;
+    merged(1, 2, last - 1, 'جامعة مؤتة', styles.universityAr);
+    merged(2, 2, last - 1, 'Mutah University', styles.universityEn);
+    merged(3, 2, last - 1, 'وحدة اللوازم', styles.unitName);
+    sheet.getRangeByIndex(1, 1).rowHeight = 30;
+    sheet.getRangeByIndex(2, 1).rowHeight = 22;
+    sheet.getRangeByIndex(3, 1).rowHeight = 22;
+    for (var r = 1; r <= 3; r++) {
+      sheet.getRangeByIndex(r, 1).cellStyle = styles.plain;
+      sheet.getRangeByIndex(r, last).cellStyle = styles.plain;
+    }
+    if (logoBytes != null && logoBytes.isNotEmpty) {
+      for (final column in [1, last]) {
+        final picture = sheet.pictures.addStream(1, column, logoBytes);
+        picture.width = 64;
+        picture.height = 73;
+      }
+    }
+    sheet.getRangeByIndex(4, 1).rowHeight = 8;
+    final divider = sheet.getRangeByIndex(4, 1, 4, last);
+    divider.merge();
+    divider.cellStyle = styles.divider;
+
+    // Decision info band.
+    merged(5, 1, 3, header.decisionLine, styles.infoBox);
+    merged(5, 4, 7, header.tenderLine, styles.infoBox);
+    merged(
+      5,
+      8,
+      last,
+      'كشف رقم ($sheetNo)   ص ( $pageNo-$pageCount )',
+      styles.infoBox,
+    );
+    merged(6, 1, last, header.subjectLine, styles.subject);
+    merged(
+      7,
+      1,
+      last,
+      'المواد المحالة على السادة / $supplierName المحترمين',
+      styles.addressee,
+    );
+    sheet.getRangeByIndex(5, 1).rowHeight = 26;
+    sheet.getRangeByIndex(6, 1).rowHeight = 26;
+    sheet.getRangeByIndex(7, 1).rowHeight = 28;
+    sheet.getRangeByIndex(8, 1).rowHeight = 6;
+
+    // Two-line bilingual table header.
+    const arabicHeaders = [
+      'رقم البند',
+      'الكمية',
+      'الوحدة',
+      'وصف المادة',
+      '',
+      'الصانع',
+      'المنشأ',
+      'سعر الوحدة',
+      'السعر الاجمالي',
+      'التسليم',
+    ];
+    const englishHeaders = [
+      'Item No.',
+      'QTY',
+      'Unit',
+      'Description',
+      'Cat#',
+      'Brand',
+      'Origin',
+      'U. price',
+      'Sub-total',
+      'يوم',
+    ];
+    const headerRow = 9;
+    for (var i = 0; i < _decisionColumnCount; i++) {
+      final arabic = sheet.getRangeByIndex(headerRow, i + 1);
+      arabic.text = arabicHeaders[i];
+      arabic.cellStyle = styles.tableHeader;
+      final english = sheet.getRangeByIndex(headerRow + 1, i + 1);
+      english.text = englishHeaders[i];
+      english.cellStyle = styles.tableHeader;
+    }
+    sheet.getRangeByIndex(headerRow, 4, headerRow, 5).merge();
+    sheet.getRangeByIndex(headerRow, 1).rowHeight = 22;
+    sheet.getRangeByIndex(headerRow + 1, 1).rowHeight = 20;
+
+    var row = headerRow + 2;
+    final firstItemRow = row;
+    for (final item in rows) {
+      final cells = <Object?>[
+        item.itemNo,
+        item.quantity,
+        item.unit,
+        item.description,
+        '',
+        '',
+        item.origin,
+        item.unitPrice,
+        item.subTotal,
+      ];
+      for (var i = 0; i < cells.length; i++) {
+        final range = sheet.getRangeByIndex(row, i + 1);
+        final value = cells[i];
+        if (value is num) {
+          range.number = value.toDouble();
+          range.cellStyle = i >= 7 ? styles.money : styles.center;
+        } else {
+          range.text = value?.toString() ?? '';
+          range.cellStyle = i == 3 ? styles.description : styles.center;
+        }
+      }
+      sheet.autoFitRow(row);
+      if (sheet.getRangeByIndex(row, 1).rowHeight < 30) {
+        sheet.getRangeByIndex(row, 1).rowHeight = 30;
+      }
+      row++;
+    }
+    final deliveryRange = sheet.getRangeByIndex(
+      firstItemRow,
+      _decisionColumnCount,
+      row - 1,
+      _decisionColumnCount,
+    );
+    deliveryRange.merge();
+    deliveryRange.cellStyle = styles.center;
+    sheet.getRangeByIndex(firstItemRow, _decisionColumnCount).text =
+        header.deliveryPeriod;
+
+    if (total != null) {
+      merged(
+        row,
+        1,
+        8,
+        'القيمة الاجمالية: ${arabicDinarAmountInWords(total)} شاملة كافة الرسوم والضرائب والضريبة العامة على المبيعات',
+        styles.totalLabel,
+      );
+      final totalCell = sheet.getRangeByIndex(row, 9);
+      totalCell.number = total.toDouble();
+      totalCell.cellStyle = styles.moneyBold;
+      sheet.getRangeByIndex(row, _decisionColumnCount).cellStyle =
+          styles.center;
+      sheet.getRangeByIndex(row, 1).rowHeight = 32;
+      row++;
+      const notes = [
+        '* تقديم ضمانة خطية من سوء المصنعية مصدقة من كاتب العدل وبكامل القيمة مضافا اليها (15%) من القيمة ولمدة عام كامل من تاريخ الاستلام النهائي .',
+        '* المواد أعلاه حسب العرض المقدم من الشركة .',
+        '* المواد أعلاه واصلة مستودعات الجامعة.',
+      ];
+      for (final note in notes) {
+        merged(row, 1, _decisionColumnCount, note, styles.note);
+        sheet.getRangeByIndex(row, 1).rowHeight = 22;
+        row++;
+      }
+    }
+
+    // Committee signatures at the bottom of every page.
+    row++;
+    merged(row, 1, 3, 'عضو', styles.signature);
+    merged(row, 4, 6, 'عضو', styles.signature);
+    merged(row, 7, _decisionColumnCount, 'رئيس اللجنة', styles.signature);
+    sheet.getRangeByIndex(row, 1).rowHeight = 50;
+
+    sheet.pageSetup
+      ..orientation = ExcelPageOrientation.landscape
+      ..paperSize = ExcelPaperSize.paperA4
+      ..isFitToPage = true
+      ..fitToPagesWide = 1
+      ..fitToPagesTall = 1
+      ..isCenterHorizontally = true
+      ..topMargin = 0.4
+      ..bottomMargin = 0.4
+      ..leftMargin = 0.3
+      ..rightMargin = 0.3;
+  }
+
+  /// Unique, valid worksheet name such as "1-2 شركة الوراثة".
+  static String _decisionSheetName(
+    int sheetNo,
+    int pageNo,
+    int pageCount,
+    String supplierName,
+  ) {
+    final prefix = pageCount > 1 ? '$sheetNo-$pageNo ' : '$sheetNo ';
+    final label = '$prefix$supplierName'.replaceAll(
+      RegExp(r'[:\\/?*\[\]]'),
+      '-',
+    );
+    return label.length > 31 ? label.substring(0, 31) : label;
+  }
+
   static TenderItem? _tenderItemFor(TenderDetails tender, int tenderItemId) {
     final index = tender.items.indexWhere((item) => item.id == tenderItemId);
     return index == -1 ? null : tender.items[index];
@@ -648,6 +967,32 @@ class TenderExcelGenerator {
     }
   }
 
+  /// The colored university logo, downscaled once so that embedding it twice
+  /// on every page doesn't bloat the workbook. Falls back to the original
+  /// bytes if decoding fails, and to `null` if the asset can't be loaded.
+  static Future<List<int>?> _loadDecisionLogoBytes() async {
+    try {
+      final data = await rootBundle.load('assets/image/mu_logo_login_hd.png');
+      final original = data.buffer.asUint8List();
+      try {
+        final codec = await ui.instantiateImageCodec(
+          original,
+          targetWidth: 220,
+        );
+        final frame = await codec.getNextFrame();
+        final png = await frame.image.toByteData(
+          format: ui.ImageByteFormat.png,
+        );
+        frame.image.dispose();
+        return png?.buffer.asUint8List() ?? original;
+      } catch (_) {
+        return original;
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
   static void _insertLogo(Worksheet sheet, List<int>? logoBytes) {
     if (logoBytes == null || logoBytes.isEmpty) return;
     final picture = sheet.pictures.addStream(1, 1, logoBytes);
@@ -742,6 +1087,238 @@ class TenderExcelGenerator {
     workbook.dispose();
     return bytes;
   }
+}
+
+class _DecisionHeader {
+  const _DecisionHeader({
+    required this.decisionLine,
+    required this.tenderLine,
+    required this.subjectLine,
+    required this.deliveryPeriod,
+  });
+
+  final String decisionLine;
+  final String tenderLine;
+  final String subjectLine;
+  final String deliveryPeriod;
+}
+
+/// One line of the assignment decision table, resolved from the assignment
+/// and its tender item. The sub-total is the assigned price when set.
+class _DecisionRow {
+  const _DecisionRow({
+    required this.itemNo,
+    required this.quantity,
+    required this.unit,
+    required this.description,
+    required this.origin,
+    required this.unitPrice,
+    required this.subTotal,
+  });
+
+  /// Every text field falls back through the assignment, its tender item and
+  /// the original offer, skipping blank or "null" values, so a row is only
+  /// empty when no source has the value at all.
+  factory _DecisionRow.from(
+    TenderDetails tender,
+    ItemAssignment assignment,
+    Map<int, SupplierItemOffer> offersById,
+  ) {
+    final offer = offersById[assignment.supplierItemOfferId];
+    final itemId = assignment.tenderItemId > 0
+        ? assignment.tenderItemId
+        : offer?.itemId;
+    final index = tender.items.indexWhere((item) => item.id == itemId);
+    final item = index == -1 ? null : tender.items[index];
+    final isAlternative =
+        assignment.hasAlternative || (offer?.hasAlternative ?? false);
+    final quantity = assignment.quantity ?? item?.quantity ?? offer?.quantity;
+    final subTotal = assignment.assignedPrice ?? assignment.price;
+    final assignedDiffers =
+        assignment.assignedPrice != null &&
+        assignment.assignedPrice != assignment.price;
+    final hasQuantity = quantity != null && quantity != 0;
+    final unitPrice = assignedDiffers && hasQuantity
+        ? subTotal! / quantity
+        : assignment.unitPrice ??
+              offer?.unitPrice ??
+              (subTotal != null && hasQuantity ? subTotal / quantity : null);
+    final description = _firstFilled([
+      if (isAlternative) ...[
+        assignment.alternativeDescription,
+        offer?.alternativeDescription,
+      ],
+      item?.description,
+      assignment.description,
+      offer?.description,
+      assignment.alternativeDescription,
+      offer?.alternativeDescription,
+    ]);
+    return _DecisionRow(
+      itemNo:
+          _firstFilled([item?.itemNo, assignment.itemNo, offer?.itemNo]) ??
+          '${itemId ?? '-'}',
+      quantity: quantity,
+      unit: _firstFilled([assignment.unit, item?.unit, offer?.unit]) ?? '',
+      description: description ?? '-',
+      origin: _firstFilled([assignment.origin, offer?.origin]) ?? '',
+      unitPrice: unitPrice,
+      subTotal: subTotal,
+    );
+  }
+
+  static String? _firstFilled(List<String?> values) {
+    for (final value in values) {
+      final text = value?.trim();
+      if (text != null && text.isNotEmpty && text.toLowerCase() != 'null') {
+        return text;
+      }
+    }
+    return null;
+  }
+
+  final String itemNo;
+  final num? quantity;
+  final String unit;
+  final String description;
+  final String origin;
+  final num? unitPrice;
+  final num? subTotal;
+}
+
+class _DecisionStyles {
+  factory _DecisionStyles(Workbook workbook) {
+    Style build(String name, void Function(Style style) configure) {
+      final style = workbook.styles.add('decision_$name');
+      style.fontSize = 11;
+      style.vAlign = VAlignType.center;
+      style.wrapText = true;
+      configure(style);
+      return style;
+    }
+
+    void bordered(Style s) => s.borders.all.lineStyle = LineStyle.thin;
+
+    return _DecisionStyles._(
+      plain: build('plain', (_) {}),
+      universityAr: build('universityAr', (s) {
+        s.bold = true;
+        s.fontSize = 18;
+        s.hAlign = HAlignType.center;
+        s.fontColor = '#8B1538';
+      }),
+      universityEn: build('universityEn', (s) {
+        s.bold = true;
+        s.fontSize = 13;
+        s.hAlign = HAlignType.center;
+        s.fontColor = '#8B1538';
+      }),
+      unitName: build('unitName', (s) {
+        s.bold = true;
+        s.fontSize = 12;
+        s.hAlign = HAlignType.center;
+      }),
+      divider: build('divider', (s) {
+        s.borders.bottom.lineStyle = LineStyle.double;
+        s.borders.bottom.color = '#8B1538';
+      }),
+      infoBox: build('infoBox', (s) {
+        s.bold = true;
+        s.fontSize = 12;
+        s.hAlign = HAlignType.center;
+        s.backColor = '#F3ECEE';
+        s.borders.all.lineStyle = LineStyle.thin;
+      }),
+      subject: build('subject', (s) {
+        s.bold = true;
+        s.fontSize = 12;
+        s.hAlign = HAlignType.center;
+        s.borders.all.lineStyle = LineStyle.thin;
+      }),
+      addressee: build('addressee', (s) {
+        s.bold = true;
+        s.fontSize = 13;
+        s.hAlign = HAlignType.center;
+        s.underline = true;
+      }),
+      tableHeader: build('tableHeader', (s) {
+        s.bold = true;
+        s.hAlign = HAlignType.center;
+        s.backColor = '#E0E0E0';
+        bordered(s);
+      }),
+      center: build('center', (s) {
+        s.hAlign = HAlignType.center;
+        bordered(s);
+      }),
+      description: build('description', (s) {
+        s.hAlign = HAlignType.left;
+        bordered(s);
+      }),
+      money: build('money', (s) {
+        s.hAlign = HAlignType.center;
+        s.numberFormat = '#,##0.000';
+        bordered(s);
+      }),
+      moneyBold: build('moneyBold', (s) {
+        s.bold = true;
+        s.hAlign = HAlignType.center;
+        s.numberFormat = '#,##0.000';
+        bordered(s);
+      }),
+      totalLabel: build('totalLabel', (s) {
+        s.bold = true;
+        s.hAlign = HAlignType.center;
+        bordered(s);
+      }),
+      note: build('note', (s) {
+        s.bold = true;
+        s.hAlign = HAlignType.right;
+      }),
+      signature: build('signature', (s) {
+        s.bold = true;
+        s.fontSize = 12;
+        s.hAlign = HAlignType.center;
+        s.vAlign = VAlignType.top;
+      }),
+    );
+  }
+
+  const _DecisionStyles._({
+    required this.plain,
+    required this.universityAr,
+    required this.universityEn,
+    required this.unitName,
+    required this.divider,
+    required this.infoBox,
+    required this.subject,
+    required this.addressee,
+    required this.tableHeader,
+    required this.center,
+    required this.description,
+    required this.money,
+    required this.moneyBold,
+    required this.totalLabel,
+    required this.note,
+    required this.signature,
+  });
+
+  final Style plain;
+  final Style universityAr;
+  final Style universityEn;
+  final Style unitName;
+  final Style divider;
+  final Style infoBox;
+  final Style subject;
+  final Style addressee;
+  final Style tableHeader;
+  final Style center;
+  final Style description;
+  final Style money;
+  final Style moneyBold;
+  final Style totalLabel;
+  final Style note;
+  final Style signature;
 }
 
 class _ExcelCell {
